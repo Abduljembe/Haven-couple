@@ -1,0 +1,6 @@
+{
+  "name": "Haven - Private Couple Space",
+  "description": "End-to-end encrypted private space for couples, friend squads, and an interactive Singles Lounge featuring compulsory live camera face verification, IRL Safe Date Planner with verified public venues, Walk-Me-Home safety timer, Ghost-Free Dating gentle closure assistant, live video screening dates, and speed rounds.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
