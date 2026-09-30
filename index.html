@@ -2,17 +2,148 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Haven" />
+    <meta name="application-name" content="Haven" />
     <title>Haven - Private Couple Space</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23f43f5e'/%3E%3Cstop offset='50%25' stop-color='%23ec4899'/%3E%3Cstop offset='100%25' stop-color='%23a855f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='28' fill='%230f172a'/%3E%3Crect x='10' y='10' width='80' height='80' rx='22' fill='none' stroke='url(%23g)' stroke-width='4' opacity='0.4'/%3E%3Cpath d='M50 34 C44 24 32 26 32 37 C32 48 44 58 50 66 C56 58 68 48 68 37 C68 26 56 24 50 34 Z' fill='url(%23g)'/%3E%3Ccircle cx='50' cy='42' r='4' fill='%23ffffff'/%3E%3C/svg%3E" />
-    <meta name="description" content="End-to-end encrypted private space for couples, friend squads, and an interactive Singles Lounge featuring compulsory live camera face verification, IRL Safe Date Planner with verified public venues, Walk-Me-Home safety timer, Ghost-Free Dating gentle closure assistant, live video screening dates, and speed rounds." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <meta name="description" content="End-to-end encrypted private space for couples with audio and video calls, synchronized watch parties, and private notes." />
     <meta property="og:title" content="Haven - Private Couple Space" />
-    <meta property="og:description" content="End-to-end encrypted private space for couples, friend squads, and an interactive Singles Lounge featuring compulsory live camera face verification, IRL Safe Date Planner with verified public venues, Walk-Me-Home safety timer, Ghost-Free Dating gentle closure assistant, live video screening dates, and speed rounds." />
+    <meta property="og:description" content="End-to-end encrypted private space for couples with audio and video calls, synchronized watch parties, and private notes." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;1,400&display=swap" rel="stylesheet">
+    <script>
+      // Gracefully handle benign Vite websocket and HMR reconnection in AI Studio sandbox
+      (function() {
+        if (typeof window === 'undefined') return;
+
+        var isBenignVite = function(item) {
+          if (!item) return false;
+          var str = '';
+          if (typeof item === 'string') str = item;
+          else if (item instanceof Error) str = (item.message || '') + ' ' + (item.stack || '');
+          else {
+            try { str = String(item); } catch(e) { str = ''; }
+          }
+          return str.indexOf('[vite]') !== -1 ||
+                 str.indexOf('failed to connect to websocket') !== -1 ||
+                 str.indexOf('WebSocket connection to') !== -1 ||
+                 str.indexOf('vite-hmr') !== -1 ||
+                 str.indexOf('vite-ping') !== -1;
+        };
+
+        var origError = console.error;
+        var origWarn = console.warn;
+        var origLog = console.log;
+
+        console.error = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isBenignVite(arguments[i])) return;
+          }
+          origError.apply(console, arguments);
+        };
+
+        console.warn = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isBenignVite(arguments[i])) return;
+          }
+          origWarn.apply(console, arguments);
+        };
+
+        console.log = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isBenignVite(arguments[i])) return;
+          }
+          origLog.apply(console, arguments);
+        };
+
+        window.addEventListener('error', function(event) {
+          if (isBenignVite(event.message) || isBenignVite(event.error)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isBenignVite(event.reason)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        // Intercept Vite HMR internal websocket attempts to avoid browser console network error
+        if (window.WebSocket) {
+          var NativeWS = window.WebSocket;
+          window.WebSocket = function(url, protocols) {
+            var isVite = false;
+            if (protocols === 'vite-hmr' || protocols === 'vite-ping') isVite = true;
+            if (Array.isArray(protocols) && (protocols.indexOf('vite-hmr') !== -1 || protocols.indexOf('vite-ping') !== -1)) isVite = true;
+            if (typeof url === 'string' && (url.indexOf('token=') !== -1 || url.indexOf('/@vite') !== -1)) isVite = true;
+
+            if (isVite) {
+              var listeners = {};
+              var mockWs = {
+                CONNECTING: 0,
+                OPEN: 1,
+                CLOSING: 2,
+                CLOSED: 3,
+                readyState: 1,
+                protocol: typeof protocols === 'string' ? protocols : 'vite-hmr',
+                url: String(url),
+                bufferedAmount: 0,
+                extensions: '',
+                binaryType: 'blob',
+                send: function() {},
+                close: function() {
+                  mockWs.readyState = 3;
+                  mockWs.dispatchEvent(new Event('close'));
+                },
+                addEventListener: function(type, fn) {
+                  if (!listeners[type]) listeners[type] = [];
+                  listeners[type].push(fn);
+                },
+                removeEventListener: function(type, fn) {
+                  if (!listeners[type]) return;
+                  listeners[type] = listeners[type].filter(function(l) { return l !== fn; });
+                },
+                dispatchEvent: function(event) {
+                  var list = listeners[event.type] || [];
+                  for (var i = 0; i < list.length; i++) {
+                    try { list[i].call(mockWs, event); } catch(e) {}
+                  }
+                  if (typeof mockWs['on' + event.type] === 'function') {
+                    try { mockWs['on' + event.type].call(mockWs, event); } catch(e) {}
+                  }
+                  return true;
+                }
+              };
+              setTimeout(function() {
+                mockWs.dispatchEvent(new Event('open'));
+              }, 0);
+              return mockWs;
+            }
+            return new NativeWS(url, protocols);
+          };
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+          window.WebSocket.prototype = NativeWS.prototype;
+        }
+      })();
+    </script>
   </head>
   <body class="bg-rose-50/30 text-slate-900 antialiased selection:bg-rose-500 selection:text-white">
     <div id="root"></div>

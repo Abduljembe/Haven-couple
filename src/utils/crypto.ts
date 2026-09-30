@@ -156,7 +156,7 @@ const EMOJI_SECURITY_SET = [
 ];
 
 /**
- * Generate a Safety Verification Number (like Signal / WhatsApp) & Security Emoji sequence.
+ * Generate a Safety Verification Number (like Signal / Haven) & Security Emoji sequence.
  * Both partners can compare this to verify they share identical encryption keys with no MITM.
  */
 export async function generateSecurityFingerprint(

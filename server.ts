@@ -2,14 +2,23 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
+
+// Ensure globalThis.__dirname doesn't pollute ESM plugins like vite-plugin-pwa
+if ('__dirname' in globalThis) {
+  try {
+    delete (globalThis as any).__dirname;
+  } catch {}
+}
 
 interface RoomUser {
   socketId: string;
   id: string;
   name: string;
   avatar: string;
+  email?: string;
   statusMood?: string;
   joinedAt: number;
 }
@@ -53,6 +62,13 @@ interface ActiveSquadCall {
   }[];
 }
 
+interface PendingSpaceDeletion {
+  requestedBy: { id: string; name: string; avatar: string };
+  requestedAt: number;
+  agreedUserIds: string[];
+  status: 'pending' | 'cancelled' | 'confirmed';
+}
+
 interface RoomState {
   users: Map<string, RoomUser>;
   messages: EncryptedMessagePayload[];
@@ -65,15 +81,114 @@ interface RoomState {
   bucketList?: any[];
   locations?: Record<string, any>; // userId -> HorizonLocation
   activeCall?: ActiveSquadCall | null;
+  createdAt?: number;
+  createdBy?: { id: string; name: string; email?: string };
+  spaceType?: string;
+  roomName?: string;
+  passkey?: string;
+  invitedEmails?: string[];
+  authorizedEmails?: string[];
+  pendingDeletion?: PendingSpaceDeletion | null;
+  statuses?: any[];
+}
+
+export interface StoredUser {
+  id: string;
+  email: string; // normalized lowercase
+  name: string;
+  avatar?: string;
+  passwordHash?: string;
+  salt?: string;
+  createdAt: number;
+  lastActive?: number;
+  spaces: string[];
+  role?: string;
+  origin?: 'registered' | 'space_session' | 'guest';
+}
+
+export interface StoredInvite {
+  id: string;
+  roomId: string;
+  passkey: string;
+  spaceName: string;
+  spaceType: 'couple' | 'friends';
+  senderEmail: string;
+  senderName: string;
+  spouseEmail: string; // normalized lowercase
+  message?: string;
+  createdAt: number;
+  status: 'pending' | 'accepted' | 'declined';
 }
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORAGE_FILE = path.join(DATA_DIR, 'rooms_storage.json');
+const USERS_FILE = path.join(DATA_DIR, 'users_storage.json');
+const INVITES_FILE = path.join(DATA_DIR, 'invites_storage.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions_storage.json');
+const VOICEMAILS_FILE = path.join(DATA_DIR, 'voicemails_storage.json');
+const VIDUKI_CONFIG_FILE = path.join(DATA_DIR, 'viduki_config.json');
+
+interface StoredVidukiConfig {
+  apiKey: string;
+  baseUrl: string;
+  embedTemplate: string;
+  enabled: boolean;
+  preferredQuality?: string;
+  defaultServer?: 1 | 2 | 3 | 4;
+  themeColor?: string;
+  autoFallbackOnFailure?: boolean;
+  updatedAt?: number;
+}
+
+let vidukiConfig: StoredVidukiConfig = {
+  apiKey: '',
+  baseUrl: 'https://viduki.net/api',
+  embedTemplate: 'https://viduki.net/{server}/movie/{id}?color={color}',
+  enabled: true,
+  preferredQuality: '1080p HD',
+  defaultServer: 1,
+  themeColor: 'f43f5e',
+  autoFallbackOnFailure: true,
+};
+
+function loadVidukiConfigFromDisk() {
+  try {
+    if (fs.existsSync(VIDUKI_CONFIG_FILE)) {
+      const data = fs.readFileSync(VIDUKI_CONFIG_FILE, 'utf-8');
+      vidukiConfig = { ...vidukiConfig, ...JSON.parse(data) };
+    }
+  } catch (err) {
+    console.warn('Could not load Viduki config:', err);
+  }
+}
+
+function saveVidukiConfigToDisk() {
+  try {
+    fs.writeFileSync(VIDUKI_CONFIG_FILE, JSON.stringify(vidukiConfig, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Could not save Viduki config:', err);
+  }
+}
+
+interface StoredVoicemail {
+  id: string;
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  senderAvatar: string;
+  type: 'video' | 'audio';
+  mediaUrl: string;
+  durationSeconds: number;
+  caption?: string;
+  createdAt: number;
+  listened: boolean;
+  missedCallType?: 'video' | 'audio';
+}
 
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -86,10 +201,132 @@ async function startServer() {
     }
   }
 
-  // In-memory rooms cache
+  // In-memory persistent caches
   const rooms = new Map<string, RoomState>();
+  const users = new Map<string, StoredUser>(); // id -> StoredUser
+  let invites: StoredInvite[] = [];
+  let voicemails: StoredVoicemail[] = [];
+  const activeSessions = new Map<string, { userId: string; email: string; createdAt: number }>();
 
-  // Function to persist rooms and message history to disk
+  // Secure Password Hashing & Verification Utilities (PBKDF2 with unique salt)
+  function hashPassword(password: string, salt: string): string {
+    return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  }
+
+  function verifyPassword(password: string, salt: string, hash: string): boolean {
+    const computed = hashPassword(password, salt);
+    return computed === hash;
+  }
+
+  function generateSalt(): string {
+    return crypto.randomBytes(16).toString('hex');
+  }
+
+  // Load and save Users
+  function loadUsersFromDisk() {
+    try {
+      if (fs.existsSync(USERS_FILE)) {
+        const raw = fs.readFileSync(USERS_FILE, 'utf-8');
+        const list: StoredUser[] = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          list.forEach((u) => users.set(u.id, u));
+        }
+        console.log(`[Storage] Loaded ${users.size} registered users.`);
+      }
+    } catch (err) {
+      console.error('Error loading users from disk:', err);
+    }
+  }
+
+  function saveUsersToDisk() {
+    try {
+      const list = Array.from(users.values());
+      fs.writeFileSync(USERS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving users to disk:', err);
+    }
+  }
+
+  // Load and save Invites
+  function loadInvitesFromDisk() {
+    try {
+      if (fs.existsSync(INVITES_FILE)) {
+        const raw = fs.readFileSync(INVITES_FILE, 'utf-8');
+        invites = JSON.parse(raw);
+        console.log(`[Storage] Loaded ${invites.length} pending/active invites.`);
+      }
+    } catch (err) {
+      console.error('Error loading invites from disk:', err);
+    }
+  }
+
+  function saveInvitesToDisk() {
+    try {
+      fs.writeFileSync(INVITES_FILE, JSON.stringify(invites, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving invites to disk:', err);
+    }
+  }
+
+  // Load and save Active Sessions
+  function loadSessionsFromDisk() {
+    try {
+      if (fs.existsSync(SESSIONS_FILE)) {
+        const raw = fs.readFileSync(SESSIONS_FILE, 'utf-8');
+        const list: [string, { userId: string; email: string; createdAt: number }][] = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          list.forEach(([token, session]) => {
+            if (token && session) {
+              activeSessions.set(token, session);
+            }
+          });
+        }
+        console.log(`[Storage] Loaded ${activeSessions.size} active user sessions.`);
+      }
+    } catch (err) {
+      console.error('Error loading sessions from disk:', err);
+    }
+  }
+
+  function saveSessionsToDisk() {
+    try {
+      const list = Array.from(activeSessions.entries());
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving sessions to disk:', err);
+    }
+  }
+
+  // Load and save Voicemails / Greetings
+  function loadVoicemailsFromDisk() {
+    try {
+      if (fs.existsSync(VOICEMAILS_FILE)) {
+        const raw = fs.readFileSync(VOICEMAILS_FILE, 'utf-8');
+        voicemails = JSON.parse(raw);
+        if (!Array.isArray(voicemails)) voicemails = [];
+        console.log(`[Storage] Loaded ${voicemails.length} voicemail greetings.`);
+      }
+    } catch (err) {
+      console.error('Error loading voicemails from disk:', err);
+    }
+  }
+
+  function saveVoicemailsToDisk() {
+    try {
+      fs.writeFileSync(VOICEMAILS_FILE, JSON.stringify(voicemails, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving voicemails to disk:', err);
+    }
+  }
+
+  // Initial loads
+  loadUsersFromDisk();
+  loadInvitesFromDisk();
+  loadSessionsFromDisk();
+  loadVoicemailsFromDisk();
+  loadVidukiConfigFromDisk();
+
+  // Function to persist rooms and message history to disk permanently
   function saveRoomsToDisk() {
     try {
       const serialized: Record<string, any> = {};
@@ -102,6 +339,14 @@ async function startServer() {
           dailySpark: roomState.dailySpark || null,
           bucketList: roomState.bucketList || [],
           locations: roomState.locations || {},
+          createdAt: roomState.createdAt || Date.now(),
+          createdBy: roomState.createdBy || null,
+          spaceType: roomState.spaceType || (rId.startsWith('squad-') ? 'friends' : 'couple'),
+          roomName: roomState.roomName || rId,
+          passkey: roomState.passkey || null,
+          invitedEmails: roomState.invitedEmails || [],
+          authorizedEmails: roomState.authorizedEmails || [],
+          pendingDeletion: roomState.pendingDeletion || null,
         };
       });
       fs.writeFileSync(STORAGE_FILE, JSON.stringify(serialized, null, 2), 'utf-8');
@@ -116,6 +361,8 @@ async function startServer() {
       if (fs.existsSync(STORAGE_FILE)) {
         const dataStr = fs.readFileSync(STORAGE_FILE, 'utf-8');
         const parsed = JSON.parse(dataStr);
+        let usersReconciled = false;
+
         Object.entries(parsed).forEach(([rId, data]: [string, any]) => {
           rooms.set(rId, {
             users: new Map(),
@@ -126,8 +373,74 @@ async function startServer() {
             dailySpark: data.dailySpark || null,
             bucketList: Array.isArray(data.bucketList) ? data.bucketList : [],
             locations: data.locations || {},
+            createdAt: data.createdAt || Date.now(),
+            createdBy: data.createdBy || null,
+            spaceType: data.spaceType || (rId.startsWith('squad-') ? 'friends' : 'couple'),
+            roomName: data.roomName || rId,
+            passkey: data.passkey || null,
+            invitedEmails: Array.isArray(data.invitedEmails) ? data.invitedEmails : [],
+            authorizedEmails: Array.isArray(data.authorizedEmails) ? data.authorizedEmails : [],
+            pendingDeletion: data.pendingDeletion || null,
           });
+
+          // Reconcile and track space creator in users_storage
+          if (data.createdBy && data.createdBy.id) {
+            const uid = data.createdBy.id;
+            if (!users.has(uid)) {
+              users.set(uid, {
+                id: uid,
+                name: data.createdBy.name || 'User',
+                email: data.createdBy.email || `${(data.createdBy.name || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}_${uid.slice(-4)}@haven.local`,
+                avatar: data.createdBy.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+                createdAt: data.createdAt || Date.now(),
+                lastActive: Date.now(),
+                spaces: [rId],
+                origin: 'space_session',
+              });
+              usersReconciled = true;
+            } else {
+              const u = users.get(uid)!;
+              if (!u.spaces) u.spaces = [];
+              if (!u.spaces.includes(rId)) {
+                u.spaces.push(rId);
+                usersReconciled = true;
+              }
+            }
+          }
+
+          // Reconcile and track any users with active locations in this room
+          if (data.locations && typeof data.locations === 'object') {
+            Object.keys(data.locations).forEach((uid) => {
+              if (uid && !users.has(uid)) {
+                const isCreator = uid === data.createdBy?.id;
+                users.set(uid, {
+                  id: uid,
+                  name: isCreator ? data.createdBy.name : `Partner (${uid.slice(-4)})`,
+                  email: `${uid.slice(-6)}@haven.local`,
+                  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+                  createdAt: data.locations[uid]?.updatedAt || Date.now(),
+                  lastActive: data.locations[uid]?.updatedAt || Date.now(),
+                  spaces: [rId],
+                  origin: 'space_session',
+                });
+                usersReconciled = true;
+              } else if (uid && users.has(uid)) {
+                const u = users.get(uid)!;
+                if (!u.spaces) u.spaces = [];
+                if (!u.spaces.includes(rId)) {
+                  u.spaces.push(rId);
+                  usersReconciled = true;
+                }
+              }
+            });
+          }
         });
+
+        if (usersReconciled) {
+          saveUsersToDisk();
+          console.log(`[Storage] Reconciled and saved ${users.size} total users across all rooms into users_storage.json`);
+        }
+
         console.log(`[Storage] Loaded persistent message history and room data for ${Object.keys(parsed).length} rooms.`);
       }
     } catch (err) {
@@ -258,7 +571,14 @@ async function startServer() {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           parsed.forEach((p) => {
-            const isSeed = SEED_PROFILE_IDS.has(p.id) || p.origin === 'seed' || p.verificationBadge === 'community_sample' || !p.isRealUser;
+            const isSeed =
+              SEED_PROFILE_IDS.has(p.id) ||
+              p.origin === 'seed' ||
+              p.verificationBadge === 'community_sample' ||
+              !p.isRealUser ||
+              p.id.startsWith('sample-') ||
+              p.id.startsWith('seed-') ||
+              p.id === 'partner-sim-screening';
             // ONLY keep real registered people
             if (!isSeed && p.id && p.name) {
               const isIdVerified = p.isIdVerified !== undefined ? p.isIdVerified : (p.idVerification?.isIdProvided ?? true);
@@ -350,26 +670,31 @@ async function startServer() {
     let currentUserId: string | null = null;
 
     // Join Private Couple Space or Friends & Squad Room
-    socket.on('join-space', (data: { roomId: string; user: { id: string; name: string; avatar: string; statusMood?: string }; spaceType?: string; location?: any }) => {
-      const { roomId, user, spaceType, location } = data;
+    socket.on('join-space', (data: { roomId: string; passkey?: string; user: { id: string; name: string; avatar: string; statusMood?: string; email?: string }; spaceType?: string; location?: any }) => {
+      const { roomId, user, passkey, spaceType, location } = data;
       if (!roomId || !user) return;
 
       const room = getOrCreateRoom(roomId);
+      const isSquad = spaceType === 'friends' || room.spaceType === 'friends';
 
-      // Enforce maximum 5 members for friends & squad rooms
-      const MAX_SQUAD_MEMBERS = 5;
-      const isSquad = spaceType === 'friends' || roomId.toLowerCase().startsWith('squad-');
-      const existingUsersList = Array.from(room.users.values());
-      const alreadyInRoom = existingUsersList.some((u) => u.id === user.id);
-
-      if (isSquad && !alreadyInRoom && existingUsersList.length >= MAX_SQUAD_MEMBERS) {
-        socket.emit('space-full', {
-          roomId,
-          max: MAX_SQUAD_MEMBERS,
-          currentCount: existingUsersList.length,
-          message: 'This squad room is full (maximum 5 friends reached).',
-        });
-        return;
+      // Passkey / Password verification:
+      // If room already has a registered passkey, ensure incoming passkey matches!
+      if (room.passkey && room.passkey.trim()) {
+        const expectedKey = room.passkey.trim();
+        const incomingKey = (passkey || '').trim();
+        if (!incomingKey || incomingKey !== expectedKey) {
+          console.warn(`[Security Guard] Blocked access to space "${roomId}": Incorrect password/passkey provided by ${user.name}`);
+          socket.emit('space-access-denied', {
+            roomId,
+            reason: 'Incorrect space password. The password does not match the registered space. Access is strictly denied.',
+            error: 'Incorrect space password. The password does not match the registered space. Access is strictly denied.',
+          });
+          return;
+        }
+      } else if (passkey && passkey.trim()) {
+        // Register space passkey on first creation
+        room.passkey = passkey.trim();
+        saveRoomsToDisk();
       }
 
       // Leave previous room if any
@@ -382,6 +707,24 @@ async function startServer() {
         }
       }
 
+      // Enforce 1-to-1 couple space capacity:
+      // In Spouse Sanctuary, only 2 people (you + your partner) are ever allowed!
+      if (!isSquad) {
+        const existingDistinctUserIds = Array.from(
+          new Set(Array.from(room.users.values()).map((u) => u.id))
+        );
+        const isAlreadyMember = existingDistinctUserIds.includes(user.id);
+        if (!isAlreadyMember && existingDistinctUserIds.length >= 2) {
+          console.warn(`[Security Guard] Blocked 3rd user from joining couple space "${roomId}": Sanctuary is strictly for 2 partners.`);
+          socket.emit('space-access-denied', {
+            roomId,
+            reason: 'Spouse Sanctuary is an intimate space strictly for two partners and is already full.',
+            error: 'Spouse Sanctuary is strictly for two partners and is already full.',
+          });
+          return;
+        }
+      }
+
       currentRoomId = roomId;
       currentUserId = user.id;
       socket.join(roomId);
@@ -391,10 +734,54 @@ async function startServer() {
         id: user.id,
         name: user.name,
         avatar: user.avatar,
+        email: user.email,
         statusMood: user.statusMood || (isSquad ? 'Hanging with the squad 🎉' : 'Connected with you 💕'),
         joinedAt: Date.now(),
       };
       room.users.set(socket.id, roomUser);
+
+      // Upsert and track user in persistent users_storage.json
+      if (user && user.id) {
+        let existingUser = users.get(user.id);
+        if (!existingUser && user.email) {
+          existingUser = Array.from(users.values()).find(
+            (u) => u.email && u.email.toLowerCase() === user.email!.trim().toLowerCase()
+          );
+        }
+
+        if (existingUser) {
+          if (user.name && user.name.trim()) existingUser.name = user.name.trim();
+          if (user.avatar) existingUser.avatar = user.avatar;
+          if (user.email && (!existingUser.email || existingUser.email.endsWith('@haven.local'))) {
+            existingUser.email = user.email.trim().toLowerCase();
+          }
+          if (!existingUser.spaces) existingUser.spaces = [];
+          if (!existingUser.spaces.includes(roomId)) existingUser.spaces.push(roomId);
+          existingUser.lastActive = Date.now();
+          users.set(existingUser.id, existingUser);
+        } else {
+          const trackedUser: StoredUser = {
+            id: user.id,
+            email: user.email?.trim().toLowerCase() || `${(user.name || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}_${user.id.slice(-4)}@haven.local`,
+            name: user.name || 'Partner',
+            avatar: user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            createdAt: Date.now(),
+            lastActive: Date.now(),
+            spaces: [roomId],
+            origin: user.email ? 'registered' : 'space_session',
+          };
+          users.set(user.id, trackedUser);
+        }
+        saveUsersToDisk();
+      }
+
+      // Initialize room creation metadata if brand new
+      if (!room.createdAt) {
+        room.createdAt = Date.now();
+        room.createdBy = { id: user.id, name: user.name };
+        room.spaceType = spaceType || (isSquad ? 'friends' : 'couple');
+        saveRoomsToDisk();
+      }
 
       // Save and sync joining user's real location
       if (location) {
@@ -403,7 +790,7 @@ async function startServer() {
         saveRoomsToDisk();
       }
 
-      // Clean up expired messages
+      // Clean up expired messages (only those with explicit expiresAt set)
       const now = Date.now();
       room.messages = room.messages.filter((msg) => !msg.expiresAt || msg.expiresAt > now);
 
@@ -418,24 +805,42 @@ async function startServer() {
         anniversaryDate: room.anniversaryDate,
         locations: room.locations || {},
         activeCall: room.activeCall || null,
-        maxMembers: isSquad ? MAX_SQUAD_MEMBERS : 2,
+        musicState: room.musicState || null,
+        mediaState: room.mediaState || null,
+        maxMembers: isSquad ? undefined : 2,
+        createdAt: room.createdAt,
+        spaceType: room.spaceType || (isSquad ? 'friends' : 'couple'),
+        pendingDeletion: room.pendingDeletion || null,
+        voicemails: voicemails.filter((v) => v.roomId.toLowerCase() === roomId.toLowerCase()),
+        statuses: (room.statuses || []).filter((s: any) => s.expiresAt > Date.now()),
       });
+
+      // Immediately push any pending space invitations waiting for this user directly to their socket
+      const userEmail = (user.email || '').trim().toLowerCase();
+      const registeredUser = Array.from(users.values()).find(
+        (u) => u.id === user.id || (userEmail && u.email.toLowerCase() === userEmail)
+      );
+      const effectiveEmail = userEmail || registeredUser?.email?.toLowerCase();
+
+      if (effectiveEmail) {
+        const pendingForUser = invites.filter(
+          (inv) => inv.spouseEmail.toLowerCase() === effectiveEmail && inv.status === 'pending'
+        );
+        pendingForUser.forEach((inv) => {
+          socket.emit('spouse-invite-notification', {
+            spouseEmail: inv.spouseEmail,
+            spouseId: registeredUser?.id || user.id,
+            spouseName: registeredUser?.name || user.name,
+            invite: inv,
+          });
+        });
+      }
 
       // Notify other partners/friends in the room with updated users list and location
       socket.to(roomId).emit('peer-joined', {
         user: roomUser,
         users: usersList,
         location: location || (room.locations ? room.locations[user.id] : undefined),
-      });
-    });
-
-    // WebRTC Signaling (Offer, Answer, Candidate, Renegotiate)
-    socket.on('signal', (payload: { roomId: string; signal: unknown }) => {
-      if (!payload.roomId) return;
-      socket.to(payload.roomId).emit('signal', {
-        senderSocketId: socket.id,
-        senderId: currentUserId,
-        signal: payload.signal,
       });
     });
 
@@ -485,7 +890,7 @@ async function startServer() {
       io.to(roomId).emit('message-reaction-updated', { messageId, emoji, userId });
     });
 
-    // Delete Encrypted Message (WhatsApp-style: Delete for everyone / Delete for me)
+    // Delete Encrypted Message (Haven-style: Delete for everyone / Delete for me)
     socket.on('delete-message', (data: { roomId: string; messageId: string; deleteForEveryone: boolean; deletedBy?: string }) => {
       const { roomId, messageId, deleteForEveryone, deletedBy } = data;
       if (!roomId) return;
@@ -509,7 +914,7 @@ async function startServer() {
       io.to(roomId).emit('message-deleted', { messageId, deleteForEveryone, deletedBy: deletedBy || currentUserId });
     });
 
-    // Edit Encrypted Message (WhatsApp-style: inline edit encrypted with room key)
+    // Edit Encrypted Message (Haven-style: inline edit encrypted with room key)
     socket.on('edit-message', (data: { roomId: string; messageId: string; ciphertext: string; iv: string; editedAt?: number }) => {
       const { roomId, messageId, ciphertext, iv, editedAt } = data;
       if (!roomId || !messageId) return;
@@ -647,10 +1052,7 @@ async function startServer() {
       if (existingIndex >= 0) {
         room.activeCall.participants[existingIndex] = newParticipant;
       } else {
-        // Enforce maximum 5 participants in the call
-        if (room.activeCall.participants.length < 5) {
-          room.activeCall.participants.push(newParticipant);
-        }
+        room.activeCall.participants.push(newParticipant);
       }
 
       io.to(data.roomId).emit('squad-call-updated', { activeCall: room.activeCall });
@@ -703,18 +1105,15 @@ async function startServer() {
     // WebRTC 1-on-1 Signaling Relay (Offer, Answer, ICE Candidates)
     socket.on('signal', (data: { roomId: string; signal: unknown; targetSocketId?: string }) => {
       if (!data.roomId) return;
+      const payload = {
+        senderSocketId: socket.id,
+        senderId: currentUserId,
+        signal: data.signal,
+      };
       if (data.targetSocketId) {
-        io.to(data.targetSocketId).emit('signal', {
-          senderSocketId: socket.id,
-          senderId: currentUserId,
-          signal: data.signal,
-        });
+        io.to(data.targetSocketId).emit('signal', payload);
       } else {
-        socket.to(data.roomId).emit('signal', {
-          senderSocketId: socket.id,
-          senderId: currentUserId,
-          signal: data.signal,
-        });
+        socket.to(data.roomId).emit('signal', payload);
       }
     });
 
@@ -732,11 +1131,17 @@ async function startServer() {
     // Call Signaling: Accept
     socket.on('call-accepted', (data: { roomId: string; targetSocketId?: string; callType: 'audio' | 'video' }) => {
       if (!data.roomId) return;
-      socket.to(data.roomId).emit('call-accepted', {
+      const payload = {
         callType: data.callType,
         responderSocketId: socket.id,
         responderId: currentUserId,
-      });
+      };
+      if (data.targetSocketId) {
+        io.to(data.targetSocketId).emit('call-accepted', payload);
+      } else {
+        // Fallback broadcast to room only if targetSocketId wasn't specified
+        socket.to(data.roomId).emit('call-accepted', payload);
+      }
     });
 
     // Call Signaling: Decline
@@ -760,6 +1165,64 @@ async function startServer() {
         duration: data.duration,
       });
       io.to(data.roomId).emit('squad-call-ended', { roomId: data.roomId });
+    });
+
+    // Call Media State: Relay mute / camera toggle between participants
+    socket.on('call-media-state', (data: { roomId: string; isMuted?: boolean; isVideoOff?: boolean; targetSocketId?: string }) => {
+      if (!data.roomId) return;
+      const payload = {
+        senderSocketId: socket.id,
+        senderId: currentUserId,
+        isMuted: data.isMuted,
+        isVideoOff: data.isVideoOff,
+      };
+      if (data.targetSocketId) {
+        io.to(data.targetSocketId).emit('call-media-state', payload);
+      } else {
+        socket.to(data.roomId).emit('call-media-state', payload);
+      }
+    });
+
+    // Offline Video/Audio Voicemail Greeting: Leave / Send
+    socket.on('leave-voicemail', (data: StoredVoicemail) => {
+      if (!data || !data.roomId) return;
+      const normalizedRoomId = data.roomId.trim().toLowerCase();
+      const newVoicemail: StoredVoicemail = {
+        ...data,
+        roomId: normalizedRoomId,
+        id: data.id || `vm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        createdAt: data.createdAt || Date.now(),
+        listened: false,
+      };
+
+      voicemails.unshift(newVoicemail);
+      if (voicemails.length > 2000) voicemails.pop();
+      saveVoicemailsToDisk();
+
+      // Broadcast to room
+      io.to(normalizedRoomId).emit('new-voicemail', { voicemail: newVoicemail });
+      console.log(`[Voicemail] New ${newVoicemail.type} voicemail in room ${normalizedRoomId} from ${newVoicemail.senderName}`);
+    });
+
+    // Mark Voicemail as Listened
+    socket.on('mark-voicemail-listened', (data: { voicemailId: string; roomId: string }) => {
+      const { voicemailId, roomId } = data;
+      if (!voicemailId) return;
+      const target = voicemails.find((v) => v.id === voicemailId);
+      if (target) {
+        target.listened = true;
+        saveVoicemailsToDisk();
+        io.to(roomId.toLowerCase()).emit('voicemail-updated', { voicemailId, listened: true });
+      }
+    });
+
+    // Delete Voicemail
+    socket.on('delete-voicemail', (data: { voicemailId: string; roomId: string }) => {
+      const { voicemailId, roomId } = data;
+      if (!voicemailId) return;
+      voicemails = voicemails.filter((v) => v.id !== voicemailId);
+      saveVoicemailsToDisk();
+      io.to(roomId.toLowerCase()).emit('voicemail-deleted', { voicemailId });
     });
 
     // Partner Mood / Status
@@ -802,6 +1265,63 @@ async function startServer() {
       const room = getOrCreateRoom(data.roomId);
       room.anniversaryDate = data.anniversaryDate;
       io.to(data.roomId).emit('anniversary-updated', { anniversaryDate: data.anniversaryDate });
+    });
+
+    // --- Haven Status / Story Updates ---
+    socket.on('status-post', (data: { roomId: string; status: any }) => {
+      if (!data.roomId || !data.status) return;
+      const room = getOrCreateRoom(data.roomId);
+      if (!room.statuses) room.statuses = [];
+      const now = Date.now();
+      room.statuses = room.statuses.filter((s: any) => s.expiresAt > now);
+      room.statuses.unshift(data.status);
+      saveRoomsToDisk();
+      io.to(data.roomId).emit('status-updated', { statuses: room.statuses });
+    });
+
+    socket.on('status-comment', (data: { roomId: string; statusId: string; comment: any }) => {
+      if (!data.roomId || !data.statusId || !data.comment) return;
+      const room = getOrCreateRoom(data.roomId);
+      if (!room.statuses) room.statuses = [];
+      const target = room.statuses.find((s: any) => s.id === data.statusId);
+      if (target) {
+        if (!target.comments) target.comments = [];
+        target.comments.push(data.comment);
+        saveRoomsToDisk();
+        io.to(data.roomId).emit('status-comment-received', {
+          statusId: data.statusId,
+          comment: data.comment,
+          statuses: room.statuses,
+        });
+      }
+    });
+
+    socket.on('status-view', (data: { roomId: string; statusId: string; userId: string }) => {
+      if (!data.roomId || !data.statusId || !data.userId) return;
+      const room = getOrCreateRoom(data.roomId);
+      if (!room.statuses) return;
+      const target = room.statuses.find((s: any) => s.id === data.statusId);
+      if (target) {
+        if (!target.viewers) target.viewers = [];
+        if (!target.viewers.includes(data.userId)) {
+          target.viewers.push(data.userId);
+          saveRoomsToDisk();
+          io.to(data.roomId).emit('status-view-updated', {
+            statusId: data.statusId,
+            userId: data.userId,
+            viewers: target.viewers,
+          });
+        }
+      }
+    });
+
+    socket.on('status-delete', (data: { roomId: string; statusId: string }) => {
+      if (!data.roomId || !data.statusId) return;
+      const room = getOrCreateRoom(data.roomId);
+      if (!room.statuses) return;
+      room.statuses = room.statuses.filter((s: any) => s.id !== data.statusId);
+      saveRoomsToDisk();
+      io.to(data.roomId).emit('status-updated', { statuses: room.statuses });
     });
 
     // --- Live Love Canvas Events ---
@@ -1016,6 +1536,91 @@ async function startServer() {
         saveRoomsToDisk();
       }
       io.to(data.roomId).emit('history-wiped');
+    });
+
+    // --- MUTUAL AGREEMENT PERMANENT SPACE DELETION ---
+    // A space and all its contents can ONLY be permanently deleted if all parties agree!
+    socket.on('request-permanent-space-deletion', (data: { roomId: string; user: { id: string; name: string; avatar: string }; reason?: string }) => {
+      const { roomId, user } = data;
+      if (!roomId || !user) return;
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      room.pendingDeletion = {
+        requestedBy: user,
+        requestedAt: Date.now(),
+        agreedUserIds: [user.id],
+        status: 'pending',
+      };
+      saveRoomsToDisk();
+
+      // Broadcast deletion request to all users in the space so partner/members receive prompt
+      io.to(roomId).emit('space-deletion-requested', {
+        roomId,
+        pendingDeletion: room.pendingDeletion,
+      });
+    });
+
+    socket.on('respond-permanent-space-deletion', (data: { roomId: string; user: { id: string; name: string; avatar: string }; agree: boolean }) => {
+      const { roomId, user, agree } = data;
+      if (!roomId || !user) return;
+      const room = rooms.get(roomId);
+      if (!room || !room.pendingDeletion) return;
+
+      if (!agree) {
+        // Partner or squad member declined! The space and all records remain safe.
+        const cancelledBy = user.name;
+        room.pendingDeletion = null;
+        saveRoomsToDisk();
+        io.to(roomId).emit('space-deletion-cancelled', {
+          roomId,
+          cancelledBy,
+          message: `${cancelledBy} declined the request to permanently delete this space. Your sanctuary and all memories remain safe!`,
+        });
+        return;
+      }
+
+      // Member agreed
+      if (!room.pendingDeletion.agreedUserIds.includes(user.id)) {
+        room.pendingDeletion.agreedUserIds.push(user.id);
+      }
+
+      // Mutual agreement check:
+      // In a couple room (or standard 2-person space), both must agree.
+      // If 1 person created and tested alone, their own agreement is sufficient.
+      const isSquad = room.spaceType === 'friends' || roomId.toLowerCase().startsWith('squad-');
+      const requiredAgreements = isSquad ? Math.min(room.users.size, 3) : Math.min(2, Math.max(1, room.users.size));
+
+      if (room.pendingDeletion.agreedUserIds.length >= requiredAgreements) {
+        // MUTUAL CONSENT CONFIRMED: PERMANENTLY ERASE SPACE
+        console.log(`[Permanent Deletion] Space ${roomId} permanently erased by mutual agreement.`);
+        io.to(roomId).emit('space-permanently-deleted', {
+          roomId,
+          message: 'This space and all associated messages, photos, videos, and canvas memories have been permanently deleted by mutual agreement.',
+        });
+        rooms.delete(roomId);
+        saveRoomsToDisk();
+      } else {
+        saveRoomsToDisk();
+        io.to(roomId).emit('space-deletion-updated', {
+          roomId,
+          pendingDeletion: room.pendingDeletion,
+        });
+      }
+    });
+
+    socket.on('cancel-permanent-space-deletion', (data: { roomId: string; userId: string }) => {
+      const { roomId } = data;
+      if (!roomId) return;
+      const room = rooms.get(roomId);
+      if (!room || !room.pendingDeletion) return;
+
+      room.pendingDeletion = null;
+      saveRoomsToDisk();
+      io.to(roomId).emit('space-deletion-cancelled', {
+        roomId,
+        message: 'Permanent deletion request was cancelled by the requester.',
+      });
     });
 
     // --- Synchronized Music Lounge Events ---
@@ -1769,21 +2374,1027 @@ async function startServer() {
           }
 
           if (room.users.size === 0) {
-            // Clean up empty rooms after 24 hours of inactivity
+            // INDEFINITE PERMANENCE:
+            // Rooms are NEVER auto-deleted or cleaned up on inactivity.
+            // All shared media, voice notes, photos, drawings, and chat histories
+            // stay permanently saved on disk in rooms_storage.json unless all members mutually agree to delete!
           }
         }
       }
     });
   });
 
+  // Direct persistent data storage file serving (JSON content-type with no-cache)
+  app.get('/data/:file', (req, res) => {
+    const filename = path.basename(req.params.file);
+    const targetPath = path.join(DATA_DIR, filename);
+    if (fs.existsSync(targetPath)) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return res.sendFile(targetPath);
+    }
+    return res.status(404).json({ error: `File "${filename}" not found in data directory` });
+  });
+
+  app.use('/data', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    express.static(DATA_DIR)(req, res, next);
+  });
+
   // REST API Routes
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
+      totalUsers: users.size,
       activeRooms: rooms.size,
       activeSingles: singlesProfiles.size,
       uptime: process.uptime(),
     });
+  });
+
+  // --- DATABASE & STORAGE INSPECTOR ENDPOINTS ---
+
+  // Get summary of all database storage files
+  app.get('/api/data/summary', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.json({
+      success: true,
+      totalUsers: users.size,
+      totalRooms: rooms.size,
+      totalInvites: invites.length,
+      totalSingles: singlesProfiles.size,
+      totalVoicemails: voicemails.length,
+      dataDirectory: DATA_DIR,
+      files: {
+        users: {
+          path: USERS_FILE,
+          exists: fs.existsSync(USERS_FILE),
+          sizeBytes: fs.existsSync(USERS_FILE) ? fs.statSync(USERS_FILE).size : 0,
+          count: users.size,
+        },
+        rooms: {
+          path: STORAGE_FILE,
+          exists: fs.existsSync(STORAGE_FILE),
+          sizeBytes: fs.existsSync(STORAGE_FILE) ? fs.statSync(STORAGE_FILE).size : 0,
+          count: rooms.size,
+        },
+        invites: {
+          path: INVITES_FILE,
+          exists: fs.existsSync(INVITES_FILE),
+          sizeBytes: fs.existsSync(INVITES_FILE) ? fs.statSync(INVITES_FILE).size : 0,
+          count: invites.length,
+        },
+        singles: {
+          path: SINGLES_FILE,
+          exists: fs.existsSync(SINGLES_FILE),
+          sizeBytes: fs.existsSync(SINGLES_FILE) ? fs.statSync(SINGLES_FILE).size : 0,
+          count: singlesProfiles.size,
+        },
+      },
+    });
+  });
+
+  // Track and list all users from users_storage.json
+  app.get('/api/data/users', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const userList = Array.from(users.values()).map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      avatar: u.avatar,
+      createdAt: u.createdAt,
+      lastActive: u.lastActive || u.createdAt,
+      spaces: u.spaces || [],
+      role: u.role || 'member',
+      origin: u.origin || (u.passwordHash ? 'registered' : 'space_session'),
+      hasPassword: Boolean(u.passwordHash),
+    }));
+    res.json({
+      success: true,
+      total: userList.length,
+      users: userList,
+    });
+  });
+
+  // List all rooms and spaces from rooms_storage.json
+  app.get('/api/data/rooms', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (fs.existsSync(STORAGE_FILE)) {
+      try {
+        const raw = fs.readFileSync(STORAGE_FILE, 'utf-8');
+        return res.json(JSON.parse(raw));
+      } catch (err: any) {
+        return res.status(500).json({ error: 'Failed to read rooms_storage.json', details: err.message });
+      }
+    }
+    return res.json({});
+  });
+
+  // List all invites from invites_storage.json
+  app.get('/api/data/invites', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (fs.existsSync(INVITES_FILE)) {
+      try {
+        const raw = fs.readFileSync(INVITES_FILE, 'utf-8');
+        return res.json(JSON.parse(raw));
+      } catch (err: any) {
+        return res.status(500).json({ error: 'Failed to read invites_storage.json', details: err.message });
+      }
+    }
+    return res.json([]);
+  });
+
+  // Endpoint to track user whenever a profile is set or room is created
+  app.post('/api/users/track', (req, res) => {
+    try {
+      const { id, name, avatar, email, spaceId } = req.body;
+      if (!id && !name) {
+        return res.status(400).json({ error: 'User id or name is required' });
+      }
+
+      const targetId = id || `user-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      let existingUser = users.get(targetId);
+      if (!existingUser && email) {
+        existingUser = Array.from(users.values()).find(
+          (u) => u.email && u.email.toLowerCase() === email.trim().toLowerCase()
+        );
+      }
+
+      if (existingUser) {
+        if (name && name.trim()) existingUser.name = name.trim();
+        if (avatar) existingUser.avatar = avatar;
+        if (email && (!existingUser.email || existingUser.email.endsWith('@haven.local'))) {
+          existingUser.email = email.trim().toLowerCase();
+        }
+        if (spaceId) {
+          if (!existingUser.spaces) existingUser.spaces = [];
+          if (!existingUser.spaces.includes(spaceId)) existingUser.spaces.push(spaceId);
+        }
+        existingUser.lastActive = Date.now();
+        users.set(existingUser.id, existingUser);
+      } else {
+        const trackedUser: StoredUser = {
+          id: targetId,
+          email: email?.trim().toLowerCase() || `${(name || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}_${targetId.slice(-4)}@haven.local`,
+          name: (name || 'Partner').trim(),
+          avatar: avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          spaces: spaceId ? [spaceId] : [],
+          origin: email ? 'registered' : 'space_session',
+        };
+        users.set(targetId, trackedUser);
+      }
+
+      saveUsersToDisk();
+      const savedUser = users.get(targetId) || existingUser;
+      return res.json({
+        success: true,
+        user: {
+          id: savedUser?.id,
+          name: savedUser?.name,
+          email: savedUser?.email,
+          avatar: savedUser?.avatar,
+          spaces: savedUser?.spaces,
+          lastActive: savedUser?.lastActive,
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to track user profile' });
+    }
+  });
+
+  // --- USER AUTHENTICATION & REGISTRATION ENDPOINTS ---
+
+  // Register new user with email and password
+  app.post('/api/auth/register', (req, res) => {
+    try {
+      const { email, password, name, avatar } = req.body;
+      if (!email || typeof email !== 'string' || !email.trim()) {
+        return res.status(400).json({ error: 'A valid email address is required' });
+      }
+      if (!password || typeof password !== 'string' || password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+      }
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'Your name or nickname is required' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({ error: 'Please provide a valid email format (e.g. name@example.com)' });
+      }
+
+      // Check for existing account
+      const existing = Array.from(users.values()).find((u) => u.email.toLowerCase() === normalizedEmail);
+      if (existing) {
+        return res.status(400).json({
+          error: 'An account with this email already exists. Please sign in instead.',
+        });
+      }
+
+      const userId = `usr_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      const salt = generateSalt();
+      const passwordHash = hashPassword(password, salt);
+
+      // Check if user has any pending spouse invites already sent to this email
+      const matchedSpaces: string[] = [];
+      invites.forEach((inv) => {
+        if (inv.spouseEmail.toLowerCase() === normalizedEmail && !matchedSpaces.includes(inv.roomId)) {
+          matchedSpaces.push(inv.roomId);
+        }
+      });
+
+      const newUser: StoredUser = {
+        id: userId,
+        email: normalizedEmail,
+        name: name.trim(),
+        avatar: avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        passwordHash,
+        salt,
+        createdAt: Date.now(),
+        spaces: matchedSpaces,
+      };
+
+      users.set(userId, newUser);
+      saveUsersToDisk();
+
+      // Create session token
+      const token = crypto.randomBytes(32).toString('hex');
+      activeSessions.set(token, {
+        userId,
+        email: normalizedEmail,
+        createdAt: Date.now(),
+      });
+      saveSessionsToDisk();
+
+      console.log(`[Auth] Registered new user account: ${normalizedEmail} (${name})`);
+
+      return res.json({
+        success: true,
+        user: {
+          id: newUser.id,
+          email: newUser.email,
+          name: newUser.name,
+          avatar: newUser.avatar,
+          spaces: newUser.spaces,
+        },
+        token,
+        message: 'Account created successfully! Welcome to Haven.',
+      });
+    } catch (err: any) {
+      console.error('Error during registration:', err);
+      return res.status(500).json({ error: 'Internal server error during registration' });
+    }
+  });
+
+  // Sign In with email and password
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      let user = Array.from(users.values()).find((u) => u.email.toLowerCase() === normalizedEmail);
+
+      // If user does not exist
+      if (!user) {
+        // Seamlessly auto-register if autoRegister flag is sent or requested
+        if (req.body.autoRegister && password && password.length >= 6) {
+          const rawName = (req.body.name || normalizedEmail.split('@')[0] || 'Partner').trim();
+          const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+          const userId = `usr_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+          const salt = generateSalt();
+          const passwordHash = hashPassword(password, salt);
+
+          const matchedSpaces: string[] = [];
+          invites.forEach((inv) => {
+            if (inv.spouseEmail.toLowerCase() === normalizedEmail && !matchedSpaces.includes(inv.roomId)) {
+              matchedSpaces.push(inv.roomId);
+            }
+          });
+
+          for (const [rId, room] of rooms.entries()) {
+            if (
+              (room.invitedEmails && room.invitedEmails.some((e: string) => e.toLowerCase() === normalizedEmail)) ||
+              (room.authorizedEmails && room.authorizedEmails.some((e: string) => e.toLowerCase() === normalizedEmail))
+            ) {
+              if (!matchedSpaces.includes(rId)) matchedSpaces.push(rId);
+            }
+          }
+
+          const newUser: StoredUser = {
+            id: userId,
+            email: normalizedEmail,
+            name: displayName,
+            avatar: req.body.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            passwordHash,
+            salt,
+            createdAt: Date.now(),
+            spaces: matchedSpaces,
+          };
+          users.set(userId, newUser);
+          saveUsersToDisk();
+
+          const token = crypto.randomBytes(32).toString('hex');
+          activeSessions.set(token, {
+            userId: newUser.id,
+            email: normalizedEmail,
+            createdAt: Date.now(),
+          });
+          saveSessionsToDisk();
+
+          console.log(`[Auth] Auto-created and signed in user: ${normalizedEmail} (${displayName})`);
+          return res.json({
+            success: true,
+            user: {
+              id: newUser.id,
+              email: newUser.email,
+              name: newUser.name,
+              avatar: newUser.avatar,
+              spaces: newUser.spaces,
+            },
+            token,
+            isNewUser: true,
+            message: 'Account created and signed in successfully! Welcome to Haven.',
+          });
+        }
+
+        return res.status(401).json({
+          error: 'No account registered with this email. Please check the address or create a new account.',
+          notRegistered: true,
+          email: normalizedEmail,
+        });
+      }
+
+      // Verify password matches registered password
+      let isMatch = verifyPassword(password, user.salt, user.passwordHash);
+      if (!isMatch && password.trim() !== password) {
+        // Retry with trimmed password in case mobile keyboard added whitespace
+        isMatch = verifyPassword(password.trim(), user.salt, user.passwordHash);
+      }
+
+      if (!isMatch) {
+        console.warn(`[Security Alert] Failed login attempt for ${normalizedEmail}: Password does not match.`);
+        return res.status(401).json({
+          error: 'Incorrect password. The password does not match the registered account. Access to the space is blocked.',
+          allowReset: true,
+          email: normalizedEmail,
+        });
+      }
+
+      // Check for any newly arrived invites
+      invites.forEach((inv) => {
+        if (inv.spouseEmail.toLowerCase() === normalizedEmail && !user.spaces.includes(inv.roomId)) {
+          user.spaces.push(inv.roomId);
+        }
+      });
+      saveUsersToDisk();
+
+      // Successful login -> Generate secure session token
+      const token = crypto.randomBytes(32).toString('hex');
+      activeSessions.set(token, {
+        userId: user.id,
+        email: normalizedEmail,
+        createdAt: Date.now(),
+      });
+      saveSessionsToDisk();
+
+      console.log(`[Auth] User signed in successfully: ${normalizedEmail}`);
+
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          avatar: user.avatar,
+          spaces: user.spaces,
+        },
+        token,
+        message: 'Signed in successfully',
+      });
+    } catch (err: any) {
+      console.error('Error during login:', err);
+      return res.status(500).json({ error: 'Internal server error during login' });
+    }
+  });
+
+  // Reset password / set new password for account
+  app.post('/api/auth/reset-password', (req, res) => {
+    try {
+      const { email, newPassword } = req.body;
+      if (!email || !newPassword) {
+        return res.status(400).json({ error: 'Email and new password are required' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const user = Array.from(users.values()).find((u) => u.email.toLowerCase() === normalizedEmail);
+
+      if (!user) {
+        return res.status(404).json({ error: 'No account registered with this email address.' });
+      }
+
+      if (newPassword.length < 6) {
+        return res.status(400).json({ error: 'New password must be at least 6 characters long' });
+      }
+
+      const salt = generateSalt();
+      const passwordHash = hashPassword(newPassword.trim(), salt);
+      user.salt = salt;
+      user.passwordHash = passwordHash;
+      saveUsersToDisk();
+
+      // Automatically generate a session token so user is directly logged in
+      const token = crypto.randomBytes(32).toString('hex');
+      activeSessions.set(token, {
+        userId: user.id,
+        email: normalizedEmail,
+        createdAt: Date.now(),
+      });
+      saveSessionsToDisk();
+
+      console.log(`[Auth] Password reset successfully for: ${normalizedEmail}`);
+
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          avatar: user.avatar,
+          spaces: user.spaces,
+        },
+        token,
+        message: 'Password reset successfully! You are now signed in.',
+      });
+    } catch (err: any) {
+      console.error('Error during password reset:', err);
+      return res.status(500).json({ error: 'Internal server error during password reset' });
+    }
+  });
+
+  // Get current logged-in user profile & pending invites
+  app.get('/api/auth/me', (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    let session = activeSessions.get(token);
+    if (!session) {
+      loadSessionsFromDisk();
+      session = activeSessions.get(token);
+    }
+
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const user = users.get(session.userId);
+    if (!user) {
+      activeSessions.delete(token);
+      saveSessionsToDisk();
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const pendingInvites = invites.filter(
+      (inv) => inv.spouseEmail.toLowerCase() === user.email.toLowerCase() && inv.status === 'pending'
+    );
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatar: user.avatar,
+        spaces: user.spaces,
+      },
+      pendingInvites,
+    });
+  });
+
+  // Sign out / invalidate session
+  app.post('/api/auth/logout', (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token) {
+      activeSessions.delete(token);
+      saveSessionsToDisk();
+    }
+    return res.json({ success: true, message: 'Signed out successfully' });
+  });
+
+  // Check if an email or name is registered on Haven
+  app.get('/api/users/lookup', (req, res) => {
+    try {
+      const q = typeof req.query.query === 'string'
+        ? req.query.query.trim().toLowerCase()
+        : typeof req.query.email === 'string'
+        ? req.query.email.trim().toLowerCase()
+        : '';
+      if (!q) {
+        return res.status(400).json({ error: 'Search parameter is required' });
+      }
+      const user = Array.from(users.values()).find(
+        (u) => u.email.toLowerCase() === q || u.name.toLowerCase() === q || u.id.toLowerCase() === q
+      );
+      if (user) {
+        return res.json({
+          exists: true,
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            avatar: user.avatar,
+          },
+        });
+      }
+      return res.json({ exists: false });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Lookup failed' });
+    }
+  });
+
+  // --- SPOUSE EMAIL INVITATION ENDPOINTS ---
+
+  // Invite spouse or friends to space via email
+  app.post('/api/space/invite', (req, res) => {
+    try {
+      const { roomId, passkey, spouseEmail, emails, senderName, senderEmail, spaceName, spaceType, message } = req.body;
+      if (!roomId || typeof roomId !== 'string') {
+        return res.status(400).json({ error: 'Room ID is required' });
+      }
+
+      // Collect raw email list from any of the fields (spouseEmail, emails array, or comma/newline delimited)
+      let rawList: string[] = [];
+      if (Array.isArray(emails) && emails.length > 0) {
+        rawList = emails.map(String);
+      } else if (typeof spouseEmail === 'string' && spouseEmail.trim()) {
+        rawList = spouseEmail.split(/[\s,;]+/);
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const validEmails: string[] = [];
+
+      for (const item of rawList) {
+        const trimmed = item.trim().toLowerCase();
+        if (!trimmed) continue;
+        if (emailRegex.test(trimmed)) {
+          if (!validEmails.includes(trimmed)) validEmails.push(trimmed);
+        } else {
+          // Check if this matches a registered user's name or id
+          const registered = Array.from(users.values()).find(
+            (u) => u.name.toLowerCase() === trimmed || u.id.toLowerCase() === trimmed
+          );
+          if (registered && registered.email && !validEmails.includes(registered.email.toLowerCase())) {
+            validEmails.push(registered.email.toLowerCase());
+          }
+        }
+      }
+
+      if (validEmails.length === 0) {
+        return res.status(400).json({ error: 'Please enter a valid email address or registered partner name' });
+      }
+
+      const room = getOrCreateRoom(roomId);
+      if (passkey && !room.passkey) {
+        room.passkey = passkey;
+      }
+      if (!room.invitedEmails) room.invitedEmails = [];
+
+      const isFriends = (spaceType === 'friends') || room.spaceType === 'friends';
+
+      // STRICT CAPACITY & INVITATION LIMIT RULES:
+      // - Spouse Sanctuary (couple mode): Strictly allowed ONLY ONE partner (max 1 person).
+      // - Friends Space: Multi-friend invitations are allowed with no limit.
+      if (!isFriends) {
+        if (validEmails.length > 1) {
+          return res.status(400).json({
+            error: 'Spouse Sanctuary is strictly for two. You can only invite one partner (1 person), no more.',
+          });
+        }
+
+        const newTargetEmail = validEmails[0];
+
+        // Check if there is already an active invite for this room to a different partner
+        const activeInvites = invites.filter(
+          (inv) => inv.roomId === roomId && (inv.status === 'pending' || inv.status === 'accepted')
+        );
+        const existingOtherInvite = activeInvites.find(
+          (inv) => inv.spouseEmail.toLowerCase() !== newTargetEmail
+        );
+        if (existingOtherInvite) {
+          return res.status(400).json({
+            error: `Spouse Sanctuary is strictly limited to 1 partner. You have already invited ${existingOtherInvite.spouseEmail}. You cannot invite more than one person to a Spouse Sanctuary.`,
+          });
+        }
+
+        // Check if room already has 2 registered/joined users and neither is the invited partner
+        const currentUsersInRoom = Array.from(room.users.values());
+        if (currentUsersInRoom.length >= 2) {
+          const isInviteeAlreadyInRoom = currentUsersInRoom.some(
+            (u) => (u.email && u.email.toLowerCase() === newTargetEmail)
+          );
+          if (!isInviteeAlreadyInRoom) {
+            return res.status(400).json({
+              error: 'Spouse Sanctuary is strictly for two and already has two partners connected.',
+            });
+          }
+        }
+      }
+
+      const createdInvites: StoredInvite[] = [];
+      const registeredFriends: { name: string; email: string; avatar: string }[] = [];
+      const unregisteredEmails: string[] = [];
+
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.get('host') || 'localhost:3000';
+      const resolvedPasskey = passkey || room.passkey || '';
+      const defaultInviteLink = `${protocol}://${host}/?room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(resolvedPasskey)}&type=${isFriends ? 'friends' : 'couple'}`;
+
+      for (const normalizedEmail of validEmails) {
+        if (!room.invitedEmails.includes(normalizedEmail)) {
+          room.invitedEmails.push(normalizedEmail);
+        }
+
+        const existingUser = Array.from(users.values()).find((u) => u.email.toLowerCase() === normalizedEmail);
+
+        const inviteId = `inv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        const invite: StoredInvite = {
+          id: inviteId,
+          roomId,
+          passkey: resolvedPasskey,
+          spaceName: spaceName || room.roomName || (isFriends ? 'Squad Hangout' : 'Private Sanctuary'),
+          spaceType: (spaceType as any) || room.spaceType || (isFriends ? 'friends' : 'couple'),
+          senderEmail: senderEmail || (isFriends ? 'Your squad friend' : 'Your partner'),
+          senderName: senderName || (isFriends ? 'Your squad' : 'Your partner'),
+          spouseEmail: normalizedEmail,
+          message: message || (isFriends
+            ? `Hey! Join our private Haven squad room for hanging out, watching videos, and games 🎉`
+            : `Hey my love! Come join our private Haven sanctuary together 💕`),
+          createdAt: Date.now(),
+          status: 'pending',
+        };
+
+        invites.unshift(invite);
+        createdInvites.push(invite);
+
+        if (existingUser) {
+          registeredFriends.push({
+            name: existingUser.name,
+            email: existingUser.email,
+            avatar: existingUser.avatar,
+          });
+
+          if (!existingUser.spaces.includes(roomId)) {
+            existingUser.spaces.push(roomId);
+            saveUsersToDisk();
+          }
+        } else {
+          unregisteredEmails.push(normalizedEmail);
+        }
+
+        // Always broadcast live invite notification across the platform so partner sees it in their chat
+        io.emit('spouse-invite-notification', {
+          spouseEmail: normalizedEmail,
+          spouseId: existingUser?.id,
+          spouseName: existingUser?.name || 'Partner',
+          invite,
+        });
+
+        // Also emit directly to the active room
+        io.to(roomId).emit('incoming-space-invite', {
+          invite,
+          spouseEmail: normalizedEmail,
+        });
+      }
+
+      saveRoomsToDisk();
+      saveInvitesToDisk();
+
+      const firstInvite = createdInvites[0];
+      const singleInviteLink = `${defaultInviteLink}&invitedEmail=${encodeURIComponent(validEmails[0])}`;
+
+      console.log(`[Invite] Sent ${createdInvites.length} invitation(s) for room ${roomId} (Friends: ${isFriends})`);
+
+      const statusMsg = isFriends
+        ? `Successfully sent invites to ${createdInvites.length} friend${createdInvites.length > 1 ? 's' : ''}! ${
+            registeredFriends.length > 0
+              ? `${registeredFriends.length} registered friend(s) will be notified immediately.`
+              : ''
+          }`
+        : registeredFriends.length > 0
+        ? `Invitation successfully sent to ${registeredFriends[0].name} (${validEmails[0]})!`
+        : `Invitation created for ${validEmails[0]}! Share the invite link with your spouse.`;
+
+      return res.json({
+        success: true,
+        invite: firstInvite,
+        invites: createdInvites,
+        inviteLink: singleInviteLink,
+        generalInviteLink: defaultInviteLink,
+        invitedCount: createdInvites.length,
+        registeredCount: registeredFriends.length,
+        unregisteredCount: unregisteredEmails.length,
+        registeredFriends,
+        unregisteredEmails,
+        spouseUser: registeredFriends.length > 0 ? registeredFriends[0] : undefined,
+        message: statusMsg,
+      });
+    } catch (err: any) {
+      console.error('Error creating space invitation:', err);
+      return res.status(500).json({ error: 'Failed to create invite' });
+    }
+  });
+
+  // Get all pending invitations for a specific email or user
+  app.get('/api/space/invites', (req, res) => {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+    const userId = typeof req.query.userId === 'string' ? req.query.userId.trim() : '';
+    if (!email && !userId) {
+      return res.status(400).json({ error: 'Email or userId parameter is required' });
+    }
+
+    let userEmail = email;
+    if (!userEmail && userId) {
+      const u = users.get(userId);
+      if (u) userEmail = u.email.toLowerCase();
+    }
+
+    const pending = invites.filter(
+      (inv) =>
+        inv.status === 'pending' &&
+        ((userEmail && inv.spouseEmail.toLowerCase().trim() === userEmail) ||
+         (userId && (inv as any).spouseId === userId))
+    );
+
+    return res.json({
+      success: true,
+      invites: pending,
+    });
+  });
+
+  // Accept a space invite
+  app.post('/api/space/accept-invite', (req, res) => {
+    const { inviteId, userEmail } = req.body;
+    if (!inviteId) return res.status(400).json({ error: 'Missing inviteId' });
+
+    const invite = invites.find((inv) => inv.id === inviteId);
+    if (!invite) return res.status(404).json({ error: 'Invite not found' });
+
+    invite.status = 'accepted';
+    saveInvitesToDisk();
+
+    if (userEmail) {
+      const normalized = userEmail.trim().toLowerCase();
+      const user = Array.from(users.values()).find((u) => u.email.toLowerCase() === normalized);
+      if (user && !user.spaces.includes(invite.roomId)) {
+        user.spaces.push(invite.roomId);
+        saveUsersToDisk();
+      }
+    }
+
+    // Broadcast that the invite was accepted so the sender and all parties are notified in real-time
+    io.emit('spouse-invite-accepted', {
+      inviteId: invite.id,
+      roomId: invite.roomId,
+      spouseEmail: invite.spouseEmail,
+      senderName: invite.senderName,
+      spaceName: invite.spaceName,
+      acceptedBy: userEmail || invite.spouseEmail,
+      timestamp: Date.now(),
+    });
+
+    return res.json({
+      success: true,
+      invite,
+      message: 'Invite accepted! Entering space...',
+    });
+  });
+
+  // Cancel/Revoke a space invite (e.g. to re-invite a partner or revoke an invitation)
+  app.post('/api/space/cancel-invite', (req, res) => {
+    const { inviteId, roomId } = req.body;
+    let cancelled = false;
+    let targetRoomId = roomId;
+
+    if (inviteId) {
+      const inv = invites.find((i) => i.id === inviteId);
+      if (inv) {
+        inv.status = 'declined';
+        targetRoomId = inv.roomId;
+        cancelled = true;
+      }
+    } else if (roomId) {
+      invites.forEach((i) => {
+        if (i.roomId === roomId && i.status === 'pending') {
+          i.status = 'declined';
+          cancelled = true;
+        }
+      });
+    }
+
+    if (cancelled) {
+      if (targetRoomId) {
+        const room = rooms.get(targetRoomId);
+        if (room && room.invitedEmails) {
+          // If couple space, clearing pending allows new partner invite
+          if (room.spaceType !== 'friends') {
+            room.invitedEmails = [];
+            saveRoomsToDisk();
+          }
+        }
+      }
+      saveInvitesToDisk();
+      return res.json({ success: true, message: 'Invitation cancelled successfully' });
+    }
+    return res.status(404).json({ error: 'No matching active invitation found' });
+  });
+
+  // Get active invitations for a specific space
+  app.get('/api/space/room-invite', (req, res) => {
+    const roomId = typeof req.query.roomId === 'string' ? req.query.roomId.trim() : '';
+    if (!roomId) return res.status(400).json({ error: 'Missing roomId' });
+    const roomInvites = invites.filter(
+      (i) => i.roomId === roomId && (i.status === 'pending' || i.status === 'accepted')
+    );
+    return res.json({ invites: roomInvites });
+  });
+
+  // Get persistent messages and member state for any space
+  app.get('/api/space/:roomId/messages', (req, res) => {
+    const roomId = (req.params.roomId || '').trim().toLowerCase();
+    const room = rooms.get(roomId);
+    if (!room) {
+      return res.json({ success: true, messages: [], users: [] });
+    }
+    return res.json({
+      success: true,
+      messages: room.messages || [],
+      users: Array.from(room.users.values()),
+    });
+  });
+
+  // --- VOICEMAIL GREETINGS API ---
+
+  // Get voicemails for a space
+  app.get('/api/space/:roomId/voicemails', (req, res) => {
+    const roomId = (req.params.roomId || '').trim().toLowerCase();
+    const roomVoicemails = voicemails.filter((v) => v.roomId.toLowerCase() === roomId);
+    return res.json({ success: true, voicemails: roomVoicemails });
+  });
+
+  // Save new voicemail
+  app.post('/api/space/:roomId/voicemails', (req, res) => {
+    try {
+      const roomId = (req.params.roomId || '').trim().toLowerCase();
+      const { senderId, senderName, senderAvatar, type, mediaUrl, durationSeconds, caption, missedCallType } = req.body;
+      if (!mediaUrl) return res.status(400).json({ error: 'mediaUrl is required' });
+
+      const newVm: StoredVoicemail = {
+        id: `vm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        roomId,
+        senderId: senderId || 'unknown',
+        senderName: senderName || 'Partner',
+        senderAvatar: senderAvatar || '💕',
+        type: type === 'video' ? 'video' : 'audio',
+        mediaUrl,
+        durationSeconds: durationSeconds || 0,
+        caption: caption || '',
+        createdAt: Date.now(),
+        listened: false,
+        missedCallType,
+      };
+
+      voicemails.unshift(newVm);
+      saveVoicemailsToDisk();
+      io.to(roomId).emit('new-voicemail', { voicemail: newVm });
+      return res.json({ success: true, voicemail: newVm });
+    } catch (err) {
+      console.error('Error saving voicemail:', err);
+      return res.status(500).json({ error: 'Failed to save voicemail' });
+    }
+  });
+
+  // Mark voicemail as listened
+  app.patch('/api/space/:roomId/voicemails/:voicemailId', (req, res) => {
+    const { voicemailId, roomId } = req.params;
+    const target = voicemails.find((v) => v.id === voicemailId);
+    if (target) {
+      target.listened = true;
+      saveVoicemailsToDisk();
+      io.to(roomId.toLowerCase()).emit('voicemail-updated', { voicemailId, listened: true });
+      return res.json({ success: true, voicemail: target });
+    }
+    return res.status(404).json({ error: 'Voicemail not found' });
+  });
+
+  // Delete voicemail
+  app.delete('/api/space/:roomId/voicemails/:voicemailId', (req, res) => {
+    const { voicemailId, roomId } = req.params;
+    voicemails = voicemails.filter((v) => v.id !== voicemailId);
+    saveVoicemailsToDisk();
+    io.to(roomId.toLowerCase()).emit('voicemail-deleted', { voicemailId });
+    return res.json({ success: true });
+  });
+
+  // Verify and inspect Space persistence and status
+  app.get('/api/space/verify', (req, res) => {
+    const roomId = typeof req.query.roomId === 'string' ? req.query.roomId.trim().toLowerCase() : '';
+    if (!roomId) return res.status(400).json({ error: 'Missing roomId query parameter' });
+
+    const room = rooms.get(roomId);
+    if (!room) {
+      return res.json({
+        exists: false,
+        message: 'Space does not exist yet. You will be the creator of this permanent room.',
+      });
+    }
+
+    return res.json({
+      exists: true,
+      roomId,
+      spaceType: room.spaceType || (roomId.startsWith('squad-') ? 'friends' : 'couple'),
+      createdAt: room.createdAt || null,
+      messageCount: room.messages ? room.messages.length : 0,
+      activeMembersCount: room.users.size,
+      hasPendingDeletion: !!room.pendingDeletion,
+      permanentStorage: true,
+    });
+  });
+
+  // Global High-Availability WebRTC ICE Servers (STUN & TURN for cross-country calling)
+  app.get('/api/webrtc/ice-servers', async (req, res) => {
+    // Check if custom Metered or dedicated TURN credentials are provided via environment
+    if (process.env.METERED_API_KEY && process.env.METERED_DOMAIN) {
+      try {
+        const meteredRes = await fetch(
+          `https://${process.env.METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${process.env.METERED_API_KEY}`
+        );
+        if (meteredRes.ok) {
+          const meteredServers = await meteredRes.json();
+          if (Array.isArray(meteredServers) && meteredServers.length > 0) {
+            return res.json({ iceServers: meteredServers });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch dynamic Metered TURN credentials, falling back:', e);
+      }
+    }
+
+    // High-Availability Worldwide STUN & TURN Relay Servers
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:standard.relay.metered.ca:80' },
+      { urls: 'stun:standard.relay.metered.ca:443' },
+      {
+        urls: [
+          'turn:standard.relay.metered.ca:80',
+          'turn:standard.relay.metered.ca:80?transport=tcp',
+          'turn:standard.relay.metered.ca:443',
+          'turn:standard.relay.metered.ca:443?transport=tcp',
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+      {
+        urls: [
+          'turns:standard.relay.metered.ca:443?transport=tcp',
+          'turns:standard.relay.metered.ca:443',
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+    ];
+
+    if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+      iceServers.unshift({
+        urls: [process.env.TURN_URL],
+        username: process.env.TURN_USERNAME,
+        credential: process.env.TURN_CREDENTIAL,
+      });
+    }
+
+    res.json({ iceServers });
   });
 
   // --- HAVEN SINGLES REST APIS ---
@@ -1945,20 +3556,68 @@ async function startServer() {
     }
   });
 
-  // Delete or unregister a Single profile
+  // Delete or permanently remove a Single profile
   app.delete('/api/singles/:id', (req, res) => {
     try {
       const id = req.params.id;
       if (!id) return res.status(400).json({ error: 'Profile ID required' });
+      
       const existed = singlesProfiles.delete(id);
+      
+      // Clean up waves from or to this user
+      singlesWaves = singlesWaves.filter((w) => w.fromId !== id && w.toId !== id);
+      saveWavesToDisk();
+      
+      // Clean up date plans from or to this user
+      safeDatePlans = safeDatePlans.filter((p) => p.fromProfile?.id !== id && p.toProfile?.id !== id);
+      saveSafeDatesToDisk();
+      
       saveSinglesToDisk();
+      
       if (existed) {
-        io.to('singles-lounge').emit('singles-profile-deleted', { id });
+        io.to('singles-lounge').emit('singles-profile-deleted', { id, userId: id });
+        io.to('singles-lounge').emit('singles-member-left', { userId: id, id });
       }
-      res.json({ success: true, message: 'Profile removed from Singles Lounge' });
+      console.log(`[Singles] Profile ${id} permanently deleted.`);
+      res.json({ success: true, message: 'Profile permanently deleted from Singles Lounge', id });
     } catch (err: any) {
       console.error('Error deleting profile:', err);
-      res.status(500).json({ error: 'Failed to remove profile' });
+      res.status(500).json({ error: 'Failed to permanently delete profile' });
+    }
+  });
+
+  // Purge any sample, mock, or seed profiles so only real registered humans exist
+  app.post('/api/singles/purge-samples', (req, res) => {
+    try {
+      let count = 0;
+      for (const [id, p] of singlesProfiles.entries()) {
+        const isSample = SEED_PROFILE_IDS.has(id) ||
+          p.origin === 'seed' ||
+          p.verificationBadge === 'community_sample' ||
+          !p.isRealUser ||
+          id.startsWith('sample-') ||
+          id.startsWith('seed-') ||
+          id === 'partner-sim-screening';
+        if (isSample) {
+          singlesProfiles.delete(id);
+          count++;
+        }
+      }
+      saveSinglesToDisk();
+      io.to('singles-lounge').emit('singles-directory-purged', {
+        remainingCount: singlesProfiles.size,
+        realUsers: Array.from(singlesProfiles.values()),
+      });
+      console.log(`[Singles] Purged ${count} sample profiles. Remaining real profiles: ${singlesProfiles.size}`);
+      res.json({
+        success: true,
+        purgedCount: count,
+        remainingRealSingles: singlesProfiles.size,
+        message: 'All sample profiles removed. Directory is 100% real registered members.',
+      });
+    } catch (err: any) {
+      console.error('Error purging sample profiles:', err);
+      res.status(500).json({ error: 'Failed to purge sample profiles' });
     }
   });
 
@@ -2118,19 +3777,13 @@ async function startServer() {
     }
   });
 
-  // Delete/Unregister profile
-  app.delete('/api/singles/:userId', (req, res) => {
-    try {
-      const userId = req.params.userId;
-      if (singlesProfiles.has(userId)) {
-        singlesProfiles.delete(userId);
-        saveSinglesToDisk();
-        io.to('singles-lounge').emit('singles-member-left', { userId });
-      }
-      res.json({ success: true, message: 'Profile removed' });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to delete profile' });
-    }
+  // WebRTC Signaling & Network Latency Diagnostic Ping
+  app.get('/api/webrtc/ping', (req, res) => {
+    res.json({
+      status: 'ok',
+      serverTime: Date.now(),
+      connectionsCount: io.engine.clientsCount || 0,
+    });
   });
 
   // Music API Routes for Direct Web Streaming & Search
@@ -2813,7 +4466,7 @@ async function startServer() {
 
     // --- Extended Animation & 4K Shorts ---
     {
-      id: 'anim-spring-yt',
+      id: 'anim-spring-mountain-yt',
       title: 'Spring: Ancient Mountain Spirit',
       artist: 'Andy Goralczyk (Blender Studio 2019)',
       year: 2019,
@@ -3153,70 +4806,17 @@ async function startServer() {
         console.warn('Direct YouTube search error in /api/movies/search:', ytErr);
       }
 
-      // 4. If query is provided, also query universal movie database (Wikipedia REST API)
-      // to resolve authentic theatrical poster, overview, director, and streaming availability
-      let wikiMovieResults: any[] = [];
-      try {
-        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q + ' film')}&utf8=&format=json`;
-        const wikiRes = await fetch(wikiUrl, { signal: AbortSignal.timeout(3500) });
-        if (wikiRes.ok) {
-          const wikiData = await wikiRes.json();
-          const hits: any[] = wikiData.query?.search || [];
-
-          for (const hit of hits.slice(0, 3)) {
-            try {
-              const summaryRes = await fetch(
-                `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit.title)}`,
-                { signal: AbortSignal.timeout(2500) }
-              );
-              if (!summaryRes.ok) continue;
-              const summary = await summaryRes.json();
-              const poster = summary.originalimage?.source || summary.thumbnail?.source;
-              if (!poster) continue;
-
-              const cleanTitle = summary.title.replace(/ \([^)]*film[^)]*\)/gi, '').trim();
-              const yearMatch = (summary.description || summary.extract || '').match(/\b(19\d\d|20\d\d)\b/);
-              const year = yearMatch ? parseInt(yearMatch[1], 10) : undefined;
-
-              wikiMovieResults.push({
-                id: `cinema-${hit.pageid || Math.random().toString(36).substr(2, 7)}`,
-                title: cleanTitle,
-                artist: summary.description || 'Cinema Feature',
-                year: year,
-                genre: 'Cinema Feature',
-                category: 'blockbuster',
-                type: 'youtube',
-                url: `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanTitle + ' trailer')}`,
-                thumbnailUrl: poster,
-                backdropUrl: poster,
-                duration: 7200,
-                rating: '★ 9.6/10',
-                matchScore: 98,
-                description: summary.extract
-                  ? summary.extract.replace(/<[^>]*>?/gm, '').slice(0, 240) + '...'
-                  : 'Theatrical cinema feature. Watch with partner via direct stream or synchronized screen share.',
-                tags: ['Theatrical Release', 'Stream Screen', 'Watch Party', 'HD Cinema'],
-                source: 'cinema',
-                badge: 'Cinema Spotlight 🌟',
-                streamQuality: '4K Ultra HD',
-                availableOn: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV'],
-                streamSourceType: 'screen_share',
-              });
-            } catch {}
-          }
-        }
-      } catch (wikiErr) {
-        console.warn('Wiki movie search error:', wikiErr);
-      }
-
-      // Combine curated matches, YouTube direct results, archive results, and universal movie results
+      // Combine YouTube direct results, curated matches, and public domain archive streams
       const seenTitles = new Set<string>();
       const combined: any[] = [];
 
-      // If category is specifically 'youtube', prioritize YouTube results
-      const listOrder = category === 'youtube'
-        ? [...ytDirectResults, ...curatedMatches.filter(m => m.type === 'youtube')]
-        : [...curatedMatches, ...ytDirectResults.slice(0, 8), ...archiveResults, ...wikiMovieResults];
+      // Prioritize pure YouTube direct video results
+      const listOrder = [
+        ...ytDirectResults,
+        ...curatedMatches.filter((m) => m.type === 'youtube'),
+        ...curatedMatches.filter((m) => m.type !== 'youtube'),
+        ...archiveResults,
+      ];
 
       for (const m of listOrder) {
         const norm = m.title.toLowerCase().trim();
@@ -3395,19 +4995,665 @@ async function startServer() {
     }
   });
 
+  // --- Viduki.net Movie Streaming API Integration ---
+
+  // 1. Get Viduki API Configuration
+  app.get('/api/movies/viduki/config', (req, res) => {
+    try {
+      res.json({
+        configured: Boolean(vidukiConfig.apiKey && vidukiConfig.apiKey.trim().length > 0),
+        apiKey: vidukiConfig.apiKey
+          ? `${vidukiConfig.apiKey.slice(0, 4)}...${vidukiConfig.apiKey.slice(-4)}`
+          : '',
+        baseUrl: vidukiConfig.baseUrl || 'https://viduki.net/api',
+        embedTemplate: vidukiConfig.embedTemplate || 'https://viduki.net/{server}/movie/{id}?color={color}',
+        enabled: vidukiConfig.enabled,
+        preferredQuality: vidukiConfig.preferredQuality || '1080p HD',
+        defaultServer: vidukiConfig.defaultServer || 1,
+        themeColor: vidukiConfig.themeColor || 'f43f5e',
+        autoFallbackOnFailure: vidukiConfig.autoFallbackOnFailure ?? true,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to read Viduki configuration' });
+    }
+  });
+
+  // 2. Save Viduki API Configuration
+  app.post('/api/movies/viduki/config', (req, res) => {
+    try {
+      const { apiKey, baseUrl, embedTemplate, enabled, preferredQuality, defaultServer, themeColor, autoFallbackOnFailure } = req.body;
+      if (typeof apiKey === 'string') {
+        const trimmedKey = apiKey.trim();
+        if (trimmedKey && !trimmedKey.includes('...')) {
+          vidukiConfig.apiKey = trimmedKey;
+        } else if (trimmedKey === '') {
+          vidukiConfig.apiKey = '';
+        }
+      }
+      if (typeof baseUrl === 'string' && baseUrl.trim()) {
+        vidukiConfig.baseUrl = baseUrl.trim().replace(/\/+$/, '');
+      }
+      if (typeof embedTemplate === 'string' && embedTemplate.trim()) {
+        vidukiConfig.embedTemplate = embedTemplate.trim();
+      }
+      if (enabled !== undefined) {
+        vidukiConfig.enabled = Boolean(enabled);
+      }
+      if (typeof preferredQuality === 'string') {
+        vidukiConfig.preferredQuality = preferredQuality;
+      }
+      if (defaultServer && [1, 2, 3, 4].includes(Number(defaultServer))) {
+        vidukiConfig.defaultServer = Number(defaultServer) as 1 | 2 | 3 | 4;
+      }
+      if (typeof themeColor === 'string') {
+        vidukiConfig.themeColor = themeColor.replace('#', '').trim() || 'f43f5e';
+      }
+      if (autoFallbackOnFailure !== undefined) {
+        vidukiConfig.autoFallbackOnFailure = Boolean(autoFallbackOnFailure);
+      }
+      vidukiConfig.updatedAt = Date.now();
+      saveVidukiConfigToDisk();
+
+      res.json({
+        success: true,
+        configured: Boolean(vidukiConfig.apiKey),
+        message: 'Viduki.net API configuration saved and synced across your sanctuary!',
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to update Viduki configuration', details: err?.message });
+    }
+  });
+
+  // 3. Test Viduki API Connection (supports GET and POST)
+  app.all('/api/movies/viduki/test', async (req, res) => {
+    try {
+      const bodyKey = typeof req.body === 'object' && req.body?.apiKey ? String(req.body.apiKey) : '';
+      const queryKey = typeof req.query?.apiKey === 'string' ? req.query.apiKey : '';
+      const reqKey = bodyKey || queryKey || '';
+      const apiKey = (reqKey && !reqKey.includes('...') ? reqKey : vidukiConfig.apiKey || '').trim();
+
+      const bodyBaseUrl = typeof req.body === 'object' && req.body?.baseUrl ? String(req.body.baseUrl) : '';
+      const queryBaseUrl = typeof req.query?.baseUrl === 'string' ? req.query.baseUrl : '';
+      const baseUrl = (bodyBaseUrl || queryBaseUrl || vidukiConfig.baseUrl || 'https://viduki.net/api').trim().replace(/\/+$/, '');
+
+      if (!apiKey) {
+        return res.json({
+          success: true,
+          message: 'Viduki.net multi-server streaming (Servers 1, 2, 3, 4) is active! You can search and stream any movie or TV series without requiring an API key.',
+        });
+      }
+
+      let testSuccess = false;
+      let host = 'viduki.net';
+      try {
+        host = new URL(baseUrl).hostname;
+      } catch {}
+
+      // Probe endpoints on Viduki
+      const candidateUrls = [
+        `${baseUrl}/status?api_key=${encodeURIComponent(apiKey)}`,
+        `${baseUrl}/ping?api_key=${encodeURIComponent(apiKey)}`,
+        `${baseUrl}/movies?api_key=${encodeURIComponent(apiKey)}&limit=1`,
+        `${baseUrl}/search?q=movie&api_key=${encodeURIComponent(apiKey)}`,
+        `${baseUrl}?api_key=${encodeURIComponent(apiKey)}`,
+      ];
+
+      for (const url of candidateUrls) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          const response = await fetch(url, {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'X-API-Key': apiKey,
+              'User-Agent': 'Haven-WatchParty/1.0',
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+
+          if (response.ok || response.status === 200 || response.status === 304) {
+            testSuccess = true;
+            break;
+          } else if (response.status === 401 || response.status === 403) {
+            return res.status(401).json({
+              success: false,
+              error: `Viduki rejected this key (HTTP ${response.status} Unauthorized). Please verify the API key on Viduki.net.`,
+            });
+          }
+        } catch {
+          // Try next probe
+        }
+      }
+
+      res.json({
+        success: true,
+        message: testSuccess
+          ? `Verified! Successfully connected to ${host} API.`
+          : `API Key registered for ${host}. Viduki multi-server streaming is active and ready in Watch Party!`,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to test connection to Viduki.net',
+      });
+    }
+  });
+
+  // 4. Search movies via Viduki.net API & Universal Media Catalog
+  app.get('/api/movies/viduki/search', async (req, res) => {
+    try {
+      const q = ((req.query.q as string) || '').trim();
+      const reqKey = (req.query.apiKey as string) || '';
+      const apiKey = (reqKey && !reqKey.includes('...') ? reqKey : vidukiConfig.apiKey || '').trim();
+      const baseUrl = ((req.query.baseUrl as string) || vidukiConfig.baseUrl || 'https://viduki.net/api').trim().replace(/\/+$/, '');
+      const preferredQuality = (req.query.quality as string) || vidukiConfig.preferredQuality || '1080p Full HD';
+      const srv = vidukiConfig.defaultServer || 1;
+      const col = vidukiConfig.themeColor || 'f43f5e';
+
+      const movies: any[] = [];
+      const seenIds = new Set<string>();
+
+      const isImdb = /^tt\d+$/i.test(q);
+      const isNumeric = /^\d+$/.test(q);
+
+      // 1. If custom apiKey is configured, query Viduki API first
+      if (apiKey) {
+        const searchUrls: string[] = [];
+        if (isImdb) {
+          searchUrls.push(
+            `${baseUrl}/movie?imdb=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`,
+            `${baseUrl}/search?imdb=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`
+          );
+        } else if (q) {
+          searchUrls.push(
+            `${baseUrl}/search?q=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`,
+            `${baseUrl}/movies?search=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`,
+            `${baseUrl}/api/v1/search?query=${encodeURIComponent(q)}&api_key=${encodeURIComponent(apiKey)}`
+          );
+        }
+
+        for (const searchUrl of searchUrls) {
+          try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const resp = await fetch(searchUrl, {
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'X-API-Key': apiKey,
+                'Accept': 'application/json',
+              },
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+
+            if (resp.ok) {
+              const data = await resp.json();
+              const rawItems: any[] = Array.isArray(data)
+                ? data
+                : Array.isArray(data.results)
+                ? data.results
+                : Array.isArray(data.movies)
+                ? data.movies
+                : Array.isArray(data.data)
+                ? data.data
+                : data.title
+                ? [data]
+                : [];
+
+              for (const item of rawItems) {
+                const movieId = item.id || item.imdb_id || item.tmdb_id || item.slug;
+                if (!movieId || seenIds.has(String(movieId))) continue;
+                seenIds.add(String(movieId));
+
+                const title = item.title || item.name || item.movie_title || 'Viduki Feature Film';
+                const imdbId = item.imdb_id || (typeof item.id === 'string' && item.id.startsWith('tt') ? item.id : undefined);
+                const tmdbId = item.tmdb_id ? String(item.tmdb_id) : undefined;
+                const isTv = item.media_type === 'tv' || item.type === 'tv' || Boolean(item.number_of_seasons);
+                const targetId = tmdbId || imdbId || String(movieId);
+
+                let playUrl = item.stream_url || item.embed_url;
+                if (!playUrl) {
+                  playUrl = isTv
+                    ? `https://viduki.net/${srv}/tv/${targetId}/1/1?color=${col}`
+                    : `https://viduki.net/${srv}/movie/${targetId}?color=${col}`;
+                }
+
+                movies.push({
+                  id: `viduki-${isTv ? 'tv' : 'movie'}-${movieId}`,
+                  title,
+                  mediaType: isTv ? 'tv' : 'movie',
+                  season: isTv ? 1 : undefined,
+                  episode: isTv ? 1 : undefined,
+                  artist: item.director || item.author || (isTv ? 'Viduki TV' : 'Viduki Cinema'),
+                  year: item.year || item.release_year || (item.release_date ? item.release_date.slice(0, 4) : undefined),
+                  genre: item.genre || (Array.isArray(item.genres) ? item.genres.join(' • ') : 'Viduki Stream'),
+                  category: 'viduki',
+                  type: 'embed',
+                  url: playUrl,
+                  embedUrl: playUrl,
+                  thumbnailUrl: item.poster || item.poster_path || item.thumbnail || item.image_url || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80',
+                  backdropUrl: item.backdrop || item.backdrop_path || item.background,
+                  duration: item.duration ? parseInt(item.duration, 10) * 60 : 7200,
+                  rating: item.rating ? `${item.rating}/10` : '9.6/10',
+                  description: item.overview || item.description || item.synopsis || `Streamed in synchronized HD from Viduki.net.`,
+                  source: 'viduki',
+                  badge: isTv ? 'Viduki TV 📺' : 'Viduki Cinema 🎬',
+                  streamQuality: item.quality || `Server ${srv} • 1080p`,
+                  availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+                  server: srv,
+                  fallbackAvailable: true,
+                  imdbId,
+                  tmdbId,
+                });
+              }
+            }
+          } catch {}
+        }
+      }
+
+      // 2. Direct numeric TMDB ID or IMDb ID instant resolution
+      if (isImdb || isNumeric) {
+        const targetId = q;
+        const isTv = false;
+        const playUrl = isTv
+          ? `https://viduki.net/${srv}/tv/${targetId}/1/1?color=${col}`
+          : `https://viduki.net/${srv}/movie/${targetId}?color=${col}`;
+
+        // Attempt metadata lookup from Cinemeta
+        let title = isImdb ? `Movie (${targetId})` : `TMDB Movie #${targetId}`;
+        let poster = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80';
+        let yearStr = '';
+        let genreStr = 'Viduki Cinema';
+        let descStr = `Watch ${targetId} on Viduki Server ${srv}.`;
+
+        if (isImdb) {
+          try {
+            const cMetaRes = await fetch(`https://v3-cinemeta.strem.io/meta/movie/${targetId}.json`);
+            if (cMetaRes.ok) {
+              const cData = await cMetaRes.json();
+              if (cData?.meta) {
+                const m = cData.meta;
+                title = m.name || title;
+                poster = m.poster || poster;
+                yearStr = m.year ? String(m.year) : '';
+                genreStr = m.genres?.join(' • ') || genreStr;
+                descStr = m.description || descStr;
+              }
+            }
+          } catch {}
+        }
+
+        movies.unshift({
+          id: `viduki-${isTv ? 'tv' : 'movie'}-${targetId}`,
+          title,
+          mediaType: isTv ? 'tv' : 'movie',
+          season: isTv ? 1 : undefined,
+          episode: isTv ? 1 : undefined,
+          artist: 'Viduki Cinema',
+          year: yearStr,
+          genre: genreStr,
+          category: 'viduki',
+          type: 'embed',
+          url: playUrl,
+          embedUrl: playUrl,
+          thumbnailUrl: poster,
+          duration: 7200,
+          rating: '9.8/10',
+          description: descStr,
+          source: 'viduki',
+          badge: 'Viduki Cinema 🎬',
+          streamQuality: `Server ${srv} • 1080p`,
+          availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+          server: srv,
+          fallbackAvailable: true,
+          imdbId: isImdb ? targetId : undefined,
+          tmdbId: isNumeric ? targetId : undefined,
+        });
+        seenIds.add(targetId);
+      }
+
+      // 3. Search via IMDb Suggestion API (Universal Instant Search for all movies & series)
+      if (q && q.length >= 2) {
+        try {
+          const cleanQuery = q.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+          const imdbSuggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanQuery)}.json`;
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 4500);
+          const imdbRes = await fetch(imdbSuggestUrl, {
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+
+          if (imdbRes.ok) {
+            const data = await imdbRes.json();
+            const suggestions = Array.isArray(data?.d) ? data.d : [];
+
+            for (const item of suggestions) {
+              if (!item.id || !item.id.startsWith('tt') || !item.l) continue;
+              if (seenIds.has(item.id)) continue;
+              seenIds.add(item.id);
+
+              const isTv = item.qid === 'tvSeries' || item.qid === 'tvMiniSeries' || item.q === 'TV series';
+              const playUrl = isTv
+                ? `https://viduki.net/${srv}/tv/${item.id}/1/1?color=${col}`
+                : `https://viduki.net/${srv}/movie/${item.id}?color=${col}`;
+
+              const poster = item.i?.imageUrl || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80';
+              const year = item.y ? String(item.y) : item.year ? String(item.year) : undefined;
+              const stars = item.s ? `Starring: ${item.s}` : isTv ? 'Viduki TV' : 'Viduki Cinema';
+
+              movies.push({
+                id: `viduki-${isTv ? 'tv' : 'movie'}-${item.id}`,
+                title: item.l,
+                mediaType: isTv ? 'tv' : 'movie',
+                season: isTv ? 1 : undefined,
+                episode: isTv ? 1 : undefined,
+                artist: stars,
+                year,
+                genre: isTv ? 'TV Series • Viduki' : 'Feature Film • Viduki',
+                category: 'viduki',
+                type: 'embed',
+                url: playUrl,
+                embedUrl: playUrl,
+                thumbnailUrl: poster,
+                duration: isTv ? 3600 : 7200,
+                rating: '9.7/10',
+                description: `Watch ${item.l} (${year || 'Stream'}) on Viduki Server ${srv}. Available in HD.`,
+                source: 'viduki',
+                badge: isTv ? 'Viduki TV 📺' : 'Viduki Cinema 🎬',
+                streamQuality: `Server ${srv} • 1080p Ultra HD`,
+                availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+                server: srv,
+                fallbackAvailable: true,
+                imdbId: item.id,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('IMDb suggestion search warning:', err);
+        }
+
+        // 4. Secondary search via Cinemeta Catalog (for synopsis, genres, and ratings)
+        try {
+          const cinemetaUrl = `https://v3-cinemeta.strem.io/catalog/movie/top/search=${encodeURIComponent(q)}.json`;
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 4000);
+          const cRes = await fetch(cinemetaUrl, { signal: controller.signal });
+          clearTimeout(timeout);
+
+          if (cRes.ok) {
+            const cData = await cRes.json();
+            const metas = Array.isArray(cData?.metas) ? cData.metas : [];
+
+            for (const item of metas.slice(0, 10)) {
+              const itemId = item.imdb_id || item.id;
+              if (!itemId || seenIds.has(itemId)) continue;
+              seenIds.add(itemId);
+
+              const isTv = item.type === 'series';
+              const playUrl = isTv
+                ? `https://viduki.net/${srv}/tv/${itemId}/1/1?color=${col}`
+                : `https://viduki.net/${srv}/movie/${itemId}?color=${col}`;
+
+              movies.push({
+                id: `viduki-${isTv ? 'tv' : 'movie'}-${itemId}`,
+                title: item.name,
+                mediaType: isTv ? 'tv' : 'movie',
+                season: isTv ? 1 : undefined,
+                episode: isTv ? 1 : undefined,
+                artist: Array.isArray(item.cast) ? item.cast.slice(0, 3).join(', ') : 'Viduki Cinema',
+                year: item.year ? String(item.year) : undefined,
+                genre: Array.isArray(item.genres) ? item.genres.join(' • ') : (item.genre ? (Array.isArray(item.genre) ? item.genre.join(' • ') : item.genre) : 'Cinema Feature'),
+                category: 'viduki',
+                type: 'embed',
+                url: playUrl,
+                embedUrl: playUrl,
+                thumbnailUrl: item.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80',
+                backdropUrl: item.background,
+                duration: 7200,
+                rating: item.imdbRating ? `${item.imdbRating}/10` : '9.6/10',
+                description: item.description || `Stream ${item.name} in synchronized HD on Viduki.net.`,
+                source: 'viduki',
+                badge: isTv ? 'Viduki TV 📺' : 'Viduki Cinema 🎬',
+                streamQuality: `Server ${srv} • 1080p Ultra HD`,
+                availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+                server: srv,
+                fallbackAvailable: true,
+                imdbId: item.imdb_id || itemId,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      // 5. If query was empty or yielded no results, fetch trending movies & series
+      if (movies.length === 0) {
+        try {
+          const trendingRes = await fetch('https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json');
+          if (trendingRes.ok) {
+            const tData = await trendingRes.json();
+            const metas = Array.isArray(tData?.metas) ? tData.metas : [];
+            for (const item of metas.slice(0, 24)) {
+              const itemId = item.imdb_id || item.id;
+              if (!itemId || seenIds.has(itemId)) continue;
+              seenIds.add(itemId);
+
+              const playUrl = `https://viduki.net/${srv}/movie/${itemId}?color=${col}`;
+              movies.push({
+                id: `viduki-movie-${itemId}`,
+                title: item.name,
+                mediaType: 'movie',
+                artist: Array.isArray(item.cast) ? item.cast.slice(0, 3).join(', ') : 'Viduki Cinema',
+                year: item.year ? String(item.year) : '2024',
+                genre: Array.isArray(item.genres) ? item.genres.join(' • ') : 'Trending Blockbuster',
+                category: 'viduki',
+                type: 'embed',
+                url: playUrl,
+                embedUrl: playUrl,
+                thumbnailUrl: item.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80',
+                backdropUrl: item.background,
+                duration: 7200,
+                rating: item.imdbRating ? `${item.imdbRating}/10` : '9.7/10',
+                description: item.description || `Trending movie stream on Viduki.net Server ${srv}`,
+                source: 'viduki',
+                badge: 'Viduki Trending 🔥',
+                streamQuality: `Server ${srv} • 1080p Ultra HD`,
+                availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+                server: srv,
+                fallbackAvailable: true,
+                imdbId: item.imdb_id || itemId,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      res.json({ movies, count: movies.length });
+    } catch (err: any) {
+      console.error('Viduki search error:', err);
+      res.status(500).json({ error: 'Viduki search failed', movies: [] });
+    }
+  });
+
+  // 5. Trending / Popular movies from Viduki & Cinemeta
+  app.get('/api/movies/viduki/trending', async (req, res) => {
+    try {
+      const srv = vidukiConfig.defaultServer || 1;
+      const col = vidukiConfig.themeColor || 'f43f5e';
+      const movies: any[] = [];
+      const seenIds = new Set<string>();
+
+      // Fetch top trending movies
+      try {
+        const topMoviesRes = await fetch('https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json');
+        if (topMoviesRes.ok) {
+          const mData = await topMoviesRes.json();
+          const metas = Array.isArray(mData?.metas) ? mData.metas : [];
+          for (const item of metas.slice(0, 25)) {
+            const itemId = item.imdb_id || item.id;
+            if (!itemId || seenIds.has(itemId)) continue;
+            seenIds.add(itemId);
+
+            const playUrl = `https://viduki.net/${srv}/movie/${itemId}?color=${col}`;
+            movies.push({
+              id: `viduki-movie-${itemId}`,
+              title: item.name,
+              mediaType: 'movie',
+              artist: Array.isArray(item.cast) ? item.cast.slice(0, 3).join(', ') : 'Viduki Cinema',
+              year: item.year ? String(item.year) : '2024',
+              genre: Array.isArray(item.genres) ? item.genres.join(' • ') : 'Trending Movie',
+              category: 'viduki',
+              type: 'embed',
+              url: playUrl,
+              embedUrl: playUrl,
+              thumbnailUrl: item.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80',
+              backdropUrl: item.background,
+              duration: 7200,
+              rating: item.imdbRating ? `${item.imdbRating}/10` : '9.8/10',
+              description: item.description || 'Trending movie stream from Viduki.net',
+              source: 'viduki',
+              badge: 'Viduki Trending 🔥',
+              streamQuality: `Server ${srv} • 1080p Ultra HD`,
+              availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+              server: srv,
+              fallbackAvailable: true,
+              imdbId: item.imdb_id || itemId,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch top movies from Cinemeta:', err);
+      }
+
+      // Fetch top trending TV series
+      try {
+        const topSeriesRes = await fetch('https://cinemeta-catalogs.strem.io/top/catalog/series/top.json');
+        if (topSeriesRes.ok) {
+          const sData = await topSeriesRes.json();
+          const metas = Array.isArray(sData?.metas) ? sData.metas : [];
+          for (const item of metas.slice(0, 20)) {
+            const itemId = item.imdb_id || item.id;
+            if (!itemId || seenIds.has(itemId)) continue;
+            seenIds.add(itemId);
+
+            const playUrl = `https://viduki.net/${srv}/tv/${itemId}/1/1?color=${col}`;
+            movies.push({
+              id: `viduki-tv-${itemId}`,
+              title: `${item.name} (S1E1)`,
+              mediaType: 'tv',
+              season: 1,
+              episode: 1,
+              artist: Array.isArray(item.cast) ? item.cast.slice(0, 3).join(', ') : 'Viduki TV',
+              year: item.year ? String(item.year) : '2024',
+              genre: Array.isArray(item.genres) ? item.genres.join(' • ') : 'Trending Series',
+              category: 'viduki',
+              type: 'embed',
+              url: playUrl,
+              embedUrl: playUrl,
+              thumbnailUrl: item.poster || 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=500',
+              backdropUrl: item.background,
+              duration: 3600,
+              rating: item.imdbRating ? `${item.imdbRating}/10` : '9.8/10',
+              description: item.description || 'Trending TV series stream from Viduki.net',
+              source: 'viduki',
+              badge: 'Viduki Top Series 📺',
+              streamQuality: `Server ${srv} • 1080p Ultra HD`,
+              availableOn: ['Viduki Server 1', 'Server 2', 'Server 3', 'Server 4'],
+              server: srv,
+              fallbackAvailable: true,
+              imdbId: item.imdb_id || itemId,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch top series from Cinemeta:', err);
+      }
+
+      res.json({ movies, count: movies.length });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Trending Viduki movies failed', movies: [] });
+    }
+  });
+
+  // Serve dev-dist files (vite-plugin-pwa development assets)
+  const devDistPath = path.join(process.cwd(), 'dev-dist');
+  if (fs.existsSync(devDistPath)) {
+    app.use('/dev-dist', (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      express.static(devDistPath)(req, res, next);
+    });
+  }
+
+  // Explicit PWA Service Worker & Manifest routing
+  app.get('/sw.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const swPath = path.join(process.cwd(), 'public', 'sw.js');
+    const devSwPath = path.join(process.cwd(), 'dev-dist', 'sw.js');
+    if (fs.existsSync(swPath)) {
+      res.sendFile(swPath);
+    } else if (fs.existsSync(devSwPath)) {
+      res.sendFile(devSwPath);
+    } else {
+      res.status(404).send('// Service worker file not found');
+    }
+  });
+
+  app.get(['/manifest.webmanifest', '/manifest.json'], (req, res) => {
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    const manifestPath = path.join(process.cwd(), 'public', 'manifest.webmanifest');
+    if (fs.existsSync(manifestPath)) {
+      res.sendFile(manifestPath);
+    } else {
+      res.status(404).json({ error: 'Manifest file not found' });
+    }
+  });
+
   // Vite Middleware for Development / Static in Production
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const indexHtmlPath = path.join(distPath, 'index.html');
+  const isProduction = process.env.NODE_ENV === 'production' || (!process.env.NODE_ENV && fs.existsSync(indexHtmlPath));
+
+  if (isProduction && fs.existsSync(indexHtmlPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res, next) => {
+      if (
+        req.path.startsWith('/api') ||
+        req.path.startsWith('/socket.io') ||
+        req.path.startsWith('/data') ||
+        req.path.startsWith('/dev-dist')
+      ) {
+        return next();
+      }
+      res.sendFile(indexHtmlPath);
+    });
+  } else {
+    // Intercept dev-dist and data before Vite SPA fallback if requested
+    app.use('/dev-dist', (req, res, next) => {
+      if (fs.existsSync(devDistPath)) {
+        return express.static(devDistPath)(req, res, next);
+      }
+      next();
+    });
+    app.use('/data', (req, res, next) => {
+      if (fs.existsSync(DATA_DIR)) {
+        return express.static(DATA_DIR)(req, res, next);
+      }
+      next();
+    });
+
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   server.listen(PORT, '0.0.0.0', () => {

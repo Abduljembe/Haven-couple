@@ -21,6 +21,7 @@ import {
   Globe,
   RefreshCw,
   X,
+  ArrowLeft,
   ChevronRight,
   QrCode,
   ArrowRight,
@@ -55,6 +56,8 @@ import {
   LifeBuoy,
   PhoneForwarded,
   Award,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   SingleProfile,
@@ -73,6 +76,21 @@ import {
   SafeDateVenue,
 } from '../types';
 import { DEFAULT_AVATARS, cropAndCompressAvatar, compressIdDocumentImage, generateDemoIdCard } from '../utils/avatarUtils';
+import { PWAInstallButton } from './PWAInstallButton';
+
+// IDs of any former seed/sample demo records to ensure they never display as real people
+const SEED_PROFILE_IDS = new Set([
+  'single-maya-lin',
+  'single-julian-vance',
+  'single-elena-rostova',
+  'single-liam-campbell',
+  'single-chloe-bennett',
+  'single-marcus-chen',
+  'single-aaliyah-patel',
+  'single-noah-rivera',
+  'single-marcus-thorne',
+  'partner-sim-screening',
+]);
 import { SpeedRoundModal } from './singles/SpeedRoundModal';
 import { CompatibilityDuelModal } from './singles/CompatibilityDuelModal';
 import { CoViewingLoungeView } from './singles/CoViewingLoungeView';
@@ -281,8 +299,77 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [shareTextTemplate, setShareTextTemplate] = useState('chill');
 
-  // Count real registered singles
-  const realSingles = useMemo(() => singles.filter((p) => p.isRealUser), [singles]);
+  // Permanent Profile Deletion & Clean Directory State
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState<boolean>(false);
+  const [isDeletingProfile, setIsDeletingProfile] = useState<boolean>(false);
+  const [isPurgingSamples, setIsPurgingSamples] = useState<boolean>(false);
+
+  // Helper to create clean unregistered profile template
+  const createBlankProfile = (): SingleProfile => ({
+    id: `single-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    name: currentUserName !== 'You' ? currentUserName : '',
+    age: 24,
+    gender: 'woman' as SingleGender,
+    lookingFor: ['everyone', 'dating'] as SingleLookingFor[],
+    intent: 'dating' as SingleIntent,
+    city: '',
+    bio: '',
+    avatar: currentUserAvatar || DEFAULT_AVATARS[0],
+    interests: ['Cinema & Films', 'Lofi Music', 'Coffee Roasting'],
+    prompts: [
+      { question: 'A movie I can watch 100 times', answer: '' },
+      { question: 'My ideal Sunday looks like', answer: '' },
+    ],
+    currentVibe: '',
+    onlineStatus: 'online',
+    registeredAt: Date.now(),
+    lastActive: Date.now(),
+    likesCount: 0,
+    allowDirectInvites: true,
+    isRealUser: true,
+    origin: 'registered',
+    isIdVerified: false,
+    verificationBadge: 'unverified_pending_id',
+    idVerification: {
+      status: 'unverified',
+      idType: 'drivers_license',
+      documentName: 'Not Provided',
+      isIdProvided: false,
+    },
+    isFeatured: true,
+    contactSocial: '',
+  });
+
+  const clearProfileStorage = () => {
+    try {
+      localStorage.removeItem('haven_singles_registered');
+      localStorage.removeItem('haven_singles_my_profile');
+      localStorage.removeItem('haven_single_profile');
+      localStorage.removeItem('haven_singles_scheduled_dates');
+      localStorage.removeItem('haven_singles_active_convs');
+      localStorage.removeItem('haven_singles_safe_date_plans');
+    } catch {}
+  };
+
+  const saveProfileLocally = (profile: SingleProfile) => {
+    try {
+      localStorage.setItem('haven_singles_my_profile', JSON.stringify(profile));
+      localStorage.setItem('haven_single_profile', JSON.stringify(profile));
+    } catch {}
+  };
+
+  // Count real registered singles (strictly excluding any former sample/seed IDs)
+  const realSingles = useMemo(() => {
+    return singles.filter(
+      (p) =>
+        p.isRealUser &&
+        !SEED_PROFILE_IDS.has(p.id) &&
+        p.origin !== 'seed' &&
+        p.verificationBadge !== 'community_sample' &&
+        !p.id.startsWith('sample-') &&
+        !p.id.startsWith('seed-')
+    );
+  }, [singles]);
 
   // Load singles from backend
   const fetchSingles = async () => {
@@ -428,6 +515,15 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
           setSingles((prev) => prev.filter((p) => p.id !== id));
         };
 
+        const handleDirectoryPurged = (data: { realUsers?: SingleProfile[] }) => {
+          if (Array.isArray(data?.realUsers)) {
+            setSingles(data.realUsers);
+          } else {
+            fetchSingles();
+          }
+          showToast('Directory refreshed with real registered singles.');
+        };
+
         // 🎥 Video Screening Socket Handlers
         const handleVideoScreeningIncoming = (invite: any) => {
           if (invite?.toUserId === myProfile.id) {
@@ -549,6 +645,7 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
         socket.on('singles-safe-date-proposal-received', handleSafeDateProposalReceived);
         socket.on('singles-safe-date-response-received', handleSafeDateResponseReceived);
         socket.on('singles-safety-checkin-alert-received', handleSafetyCheckInAlertReceived);
+        socket.on('singles-directory-purged', handleDirectoryPurged);
 
         return () => {
           socket.emit('singles-leave', { userId: myProfile.id });
@@ -557,6 +654,7 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
           socket.off('singles-wave-received', handleWaveReceived);
           socket.off('singles-member-status', handleStatus);
           socket.off('singles-profile-deleted', handleProfileDeleted);
+          socket.off('singles-directory-purged', handleDirectoryPurged);
           socket.off('singles-video-screening-incoming', handleVideoScreeningIncoming);
           socket.off('singles-video-screening-started', handleVideoScreeningStarted);
           socket.off('singles-video-screening-declined', handleVideoScreeningDeclined);
@@ -863,11 +961,20 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
     return Math.min(99, Math.max(75, score));
   };
 
-  // Filtered singles
+  // Filtered singles (strictly real people only)
   const filteredSingles = useMemo(() => {
     return singles.filter((p) => {
-      // Filter real registered singles only if toggle is active
-      if (realOnlyFilter && !p.isRealUser) return false;
+      // Strictly exclude any sample or mock profiles so real people see real members
+      if (
+        SEED_PROFILE_IDS.has(p.id) ||
+        p.origin === 'seed' ||
+        p.verificationBadge === 'community_sample' ||
+        !p.isRealUser ||
+        p.id.startsWith('sample-') ||
+        p.id.startsWith('seed-')
+      ) {
+        return false;
+      }
 
       // Filter ID Verified singles only
       if (idFilterOnly) {
@@ -1064,24 +1171,54 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
     }
   };
 
-  // Handle Unregister / Delete Profile
-  const handleDeleteProfile = async () => {
-    if (!window.confirm('Are you sure you want to remove your profile from the Singles Lounge?')) return;
+  // Handle Unregister / Open Permanent Deletion Modal
+  const handleDeleteProfile = () => {
+    setShowDeleteConfirmModal(true);
+  };
+
+  // Permanently delete profile, badges, and records from disk and server
+  const handleConfirmPermanentDelete = async () => {
+    setIsDeletingProfile(true);
     try {
       const res = await fetch(`/api/singles/${myProfile.id}`, { method: 'DELETE' });
       if (res.ok) {
         setIsRegistered(false);
-        localStorage.removeItem('haven_singles_registered');
-        localStorage.removeItem('haven_singles_my_profile');
+        clearProfileStorage();
+        setMyProfile(createBlankProfile());
+        setIdDocPhoto('');
+        setIdNumberInput('');
         setSingles((prev) => prev.filter((p) => p.id !== myProfile.id));
-        showToast('Your profile has been removed from Singles Lounge.');
+        setShowDeleteConfirmModal(false);
+        showToast('🗑️ Your profile and data have been permanently deleted from Singles Lounge.');
         setActiveTab('discover');
       } else {
-        showToast('Failed to remove profile.');
+        showToast('Failed to delete profile from server. Please try again.');
       }
     } catch (err) {
-      console.error(err);
-      showToast('Error removing profile.');
+      console.error('Error permanently deleting profile:', err);
+      showToast('Network error while deleting profile.');
+    } finally {
+      setIsDeletingProfile(false);
+    }
+  };
+
+  // Purge any sample or mock profiles so the lounge is 100% real registered people
+  const handlePurgeSampleProfiles = async () => {
+    setIsPurgingSamples(true);
+    try {
+      const res = await fetch('/api/singles/purge-samples', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`✨ ${data.purgedCount || 0} sample profiles removed. Directory is 100% real registered singles!`);
+        fetchSingles();
+      } else {
+        showToast('Could not clean samples.');
+      }
+    } catch (err) {
+      console.error('Error purging samples:', err);
+      showToast('Error connecting to server to purge samples.');
+    } finally {
+      setIsPurgingSamples(false);
     }
   };
 
@@ -1275,37 +1412,21 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
     showToast('Video screening invitation dismissed.');
   };
 
-  // Quick Video Screening Queue Pair Up
+  // Quick Video Screening Queue Pair Up (Real members only)
   const handleStartQuickVideoScreening = () => {
-    if (singles.length > 1) {
-      const otherSingles = singles.filter((s) => s.id !== myProfile.id);
-      const randomPartner = otherSingles[Math.floor(Math.random() * otherSingles.length)];
+    const realCandidates = singles.filter(
+      (s) =>
+        s.id !== myProfile.id &&
+        s.isRealUser &&
+        !SEED_PROFILE_IDS.has(s.id) &&
+        !s.id.startsWith('sample-') &&
+        !s.id.startsWith('seed-')
+    );
+    if (realCandidates.length > 0) {
+      const randomPartner = realCandidates[Math.floor(Math.random() * realCandidates.length)];
       handleStartVideoScreening(randomPartner);
     } else {
-      // Test mode with demo partner
-      const demoPartner: SingleProfile = {
-        id: 'partner-sim-screening',
-        name: 'Jordan Miller',
-        age: 26,
-        gender: 'woman',
-        lookingFor: ['everyone', 'dating'],
-        intent: 'dating',
-        city: 'New York, NY',
-        bio: 'Documentary filmmaker, weekend camper, and iced latte connoisseur ✨',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
-        interests: ['Cinema & Films', 'Coffee Roasting', 'Photography'],
-        prompts: [{ question: 'A movie I can watch 100 times', answer: 'Before Sunrise' }],
-        currentVibe: 'Curious about values and good music ☕',
-        onlineStatus: 'online',
-        registeredAt: Date.now(),
-        lastActive: Date.now(),
-        likesCount: 14,
-        allowDirectInvites: true,
-        isRealUser: true,
-        origin: 'registered',
-        verificationBadge: 'verified_real',
-      };
-      handleStartVideoScreening(demoPartner);
+      showToast('All sample profiles have been cleared. Invite a friend or wait for real members to join!');
     }
   };
 
@@ -1336,31 +1457,42 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-5xl h-[92vh] max-h-[850px] bg-stone-900 border border-stone-700/70 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-stone-100">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-5xl h-[100dvh] sm:h-[92vh] sm:max-h-[850px] bg-stone-900 border-0 sm:border border-stone-700/70 rounded-none sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden text-stone-100">
         
         {/* TOP HEADER */}
-        <div className="px-5 py-4 border-b border-stone-800 bg-stone-950/80 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-500 to-amber-500 flex items-center justify-center shadow-lg shadow-rose-500/20 text-white font-bold">
-              <Sparkles className="w-5 h-5 text-white" />
+        <div className="px-3 sm:px-5 py-3 sm:py-4 border-b border-stone-800 bg-stone-950/95 sticky top-0 z-20 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-singles-mobile-back"
+              className="p-1.5 -ml-1 text-rose-400 hover:text-rose-300 hover:bg-stone-800/80 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-rose-500 to-amber-500 flex items-center justify-center shadow-lg shadow-rose-500/20 text-white font-bold shrink-0">
+              <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                  Singles Lounge & Spark Hub
+                <h2 className="text-base sm:text-xl font-bold tracking-tight text-white truncate">
+                  Singles Lounge
                 </h2>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <span className="hidden xs:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {singles.length} Singles Total
+                  {singles.length}
                 </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
                   <Flame className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                   {realSingles.length} Real Members
                 </span>
               </div>
-              <p className="text-xs text-stone-400">
-                Register your profile to get top-priority visibility, discover matches, send waves, or launch 1-on-1 spaces
+              <p className="text-[11px] sm:text-xs text-stone-400 truncate">
+                Discover verified profiles, send waves & launch 1-on-1 spaces
               </p>
             </div>
           </div>
@@ -1571,6 +1703,9 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
                 {myProfile.biometricVerification?.verified ? 'Face Verified ✓' : 'Face Scan (Compulsory)'}
               </span>
             </button>
+
+            {/* 📱 Install App Button */}
+            <PWAInstallButton variant="compact" />
           </div>
         </div>
 
@@ -1676,8 +1811,23 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
 
                 <div className="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border bg-emerald-500/10 text-emerald-300 border-emerald-500/30">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Real Members ({singles.length})</span>
+                  <span>Real Members ({realSingles.length})</span>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={handlePurgeSampleProfiles}
+                  disabled={isPurgingSamples}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border-rose-800/50 transition active:scale-95"
+                  title="Remove any sample or mock profiles so only real registered humans exist"
+                >
+                  {isPurgingSamples ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  )}
+                  <span>{isPurgingSamples ? 'Purging...' : 'Clean Samples'}</span>
+                </button>
 
                 <button
                   onClick={fetchSingles}
@@ -2931,11 +3081,11 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
                   {isRegistered ? (
                     <button
                       type="button"
-                      onClick={handleDeleteProfile}
-                      className="px-4 py-2.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/40 text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
+                      onClick={() => setShowDeleteConfirmModal(true)}
+                      className="px-4 py-2.5 bg-rose-950/50 hover:bg-rose-900/70 text-rose-200 border border-rose-800/60 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm active:scale-95"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Remove / Unregister Profile</span>
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Permanently Delete Profile</span>
                     </button>
                   ) : (
                     <span className="text-[11px] text-stone-400">
@@ -2966,6 +3116,31 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
                   </button>
                 </div>
               </form>
+
+              {/* Danger Zone: Permanent Profile Deletion */}
+              {isRegistered && (
+                <div className="p-5 rounded-2xl bg-rose-950/20 border border-rose-900/40 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 text-rose-300 font-bold text-sm">
+                        <Trash2 className="w-4 h-4 text-rose-400" />
+                        <span>Danger Zone: Permanent Profile Deletion</span>
+                      </div>
+                      <p className="text-xs text-stone-400 leading-relaxed max-w-xl">
+                        Permanently and irreversibly erase your Singles Lounge profile, verification badges, ID credentials, match history, sent waves, and active conversations from Haven.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirmModal(true)}
+                      className="shrink-0 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-rose-900/40 flex items-center justify-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Permanently Delete Profile</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3166,7 +3341,7 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
 
               {/* Direct Social Share Buttons */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {/* WhatsApp */}
+                {/* Haven */}
                 <a
                   href={`https://wa.me/?text=${encodeURIComponent(getShareMessage())}`}
                   target="_blank"
@@ -3174,7 +3349,7 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
                   className="p-3 bg-emerald-950/40 hover:bg-emerald-900/40 border border-emerald-800/40 rounded-xl flex flex-col items-center justify-center gap-1.5 text-xs text-emerald-300 font-semibold transition"
                 >
                   <span className="text-base">📱</span>
-                  <span>WhatsApp</span>
+                  <span>Haven</span>
                 </a>
 
                 {/* Telegram */}
@@ -3557,55 +3732,87 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
 
               {/* Footer actions */}
               <div className="p-4 border-t border-stone-800 bg-stone-950 space-y-2">
-                <button
-                  onClick={() => {
-                    const target = inspectedProfile;
-                    setInspectedProfile(null);
-                    setDuelPartner(target);
-                  }}
-                  className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500/20 via-rose-500/20 to-purple-500/20 hover:from-amber-500/30 hover:to-rose-500/30 border border-white/10 rounded-xl text-xs font-bold text-amber-300 hover:text-white flex items-center justify-center gap-2 transition-all"
-                >
-                  <Swords className="w-4 h-4 text-amber-400" />
-                  <span>Play Compatibility Mini-Duel (5 Dilemmas)</span>
-                </button>
+                {inspectedProfile.id === myProfile.id ? (
+                  <div className="space-y-2">
+                    <div className="p-2.5 rounded-xl bg-stone-900 border border-stone-800 text-center text-xs text-stone-300">
+                      👤 This is your live public profile card visible to other real members in the lounge.
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setInspectedProfile(null);
+                          setActiveTab('profile');
+                        }}
+                        className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center justify-center gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Edit Profile</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setInspectedProfile(null);
+                          setShowDeleteConfirmModal(true);
+                        }}
+                        className="flex-1 py-2.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-800/60 text-rose-300 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Permanently Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        const target = inspectedProfile;
+                        setInspectedProfile(null);
+                        setDuelPartner(target);
+                      }}
+                      className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500/20 via-rose-500/20 to-purple-500/20 hover:from-amber-500/30 hover:to-rose-500/30 border border-white/10 rounded-xl text-xs font-bold text-amber-300 hover:text-white flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Swords className="w-4 h-4 text-amber-400" />
+                      <span>Play Compatibility Mini-Duel (5 Dilemmas)</span>
+                    </button>
 
-                {/* 🎥 Video Screening Call Button */}
-                <button
-                  onClick={() => {
-                    const target = inspectedProfile;
-                    setInspectedProfile(null);
-                    handleStartVideoScreening(target);
-                  }}
-                  className="w-full py-2.5 px-3 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 rounded-xl text-xs font-bold text-white shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 transition-all"
-                >
-                  <Video className="w-4 h-4" />
-                  <span>Start Video Screening Call (Q&A + Match/Leave) 🎥</span>
-                </button>
+                    {/* 🎥 Video Screening Call Button */}
+                    <button
+                      onClick={() => {
+                        const target = inspectedProfile;
+                        setInspectedProfile(null);
+                        handleStartVideoScreening(target);
+                      }}
+                      className="w-full py-2.5 px-3 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 rounded-xl text-xs font-bold text-white shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Video className="w-4 h-4" />
+                      <span>Start Video Screening Call (Q&A + Match/Leave) 🎥</span>
+                    </button>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const target = inspectedProfile;
-                      setInspectedProfile(null);
-                      setWavingToProfile(target);
-                      setWaveType('wave');
-                    }}
-                    className="flex-1 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5"
-                  >
-                    <span>👋 Send Wave</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      const target = inspectedProfile;
-                      setInspectedProfile(null);
-                      handleCreateInstantSpaceWith(target);
-                    }}
-                    className="flex-1 py-2 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center justify-center gap-1.5"
-                  >
-                    <Tv className="w-3.5 h-3.5" />
-                    <span>Invite to 1-on-1 Space</span>
-                  </button>
-                </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const target = inspectedProfile;
+                          setInspectedProfile(null);
+                          setWavingToProfile(target);
+                          setWaveType('wave');
+                        }}
+                        className="flex-1 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5"
+                      >
+                        <span>👋 Send Wave</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          const target = inspectedProfile;
+                          setInspectedProfile(null);
+                          handleCreateInstantSpaceWith(target);
+                        }}
+                        className="flex-1 py-2 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center justify-center gap-1.5"
+                      >
+                        <Tv className="w-3.5 h-3.5" />
+                        <span>Invite to 1-on-1 Space</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -3789,6 +3996,67 @@ export const SinglesLoungeModal: React.FC<SinglesLoungeModalProps> = ({
             onSendDateProposal={handleSendSafeDateProposal}
             onUpdatePlanStatus={handleUpdateSafeDateStatus}
           />
+        )}
+
+        {/* ⚠️ PERMANENT PROFILE DELETION CONFIRMATION MODAL */}
+        {showDeleteConfirmModal && (
+          <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-stone-900 border border-rose-900/60 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-rose-950/80 border border-rose-800/60 flex items-center justify-center text-rose-400 shrink-0">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Permanently Delete Profile?</h3>
+                  <p className="text-xs text-rose-300/80">This action is irreversible</p>
+                </div>
+              </div>
+
+              <div className="bg-stone-950/80 border border-stone-800 rounded-xl p-3.5 space-y-2 text-xs text-stone-300">
+                <p className="font-semibold text-stone-200">
+                  Permanently deleting your profile will remove:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-stone-400 text-[11px] pl-1">
+                  <li>Your public singles profile card and bio</li>
+                  <li>Your verified identity status and face liveness credentials</li>
+                  <li>All sent & received waves, secret crush sparks, and safe date plans</li>
+                  <li>Your presence in the real-member directory</li>
+                </ul>
+                <p className="text-stone-400 text-[11px] pt-1 border-t border-stone-800/80">
+                  Real people are free to register a new profile at any time.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isDeletingProfile}
+                  onClick={() => setShowDeleteConfirmModal(false)}
+                  className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingProfile}
+                  onClick={handleConfirmPermanentDelete}
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-rose-600/30 flex items-center gap-2"
+                >
+                  {isDeletingProfile ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Permanently Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Permanently Delete</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
       </div>

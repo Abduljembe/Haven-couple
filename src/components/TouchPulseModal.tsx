@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Heart, Sparkles, Hand, Volume2, VolumeX, Flame } from 'lucide-react';
+import { X, ArrowLeft, Heart, Sparkles, Hand, Volume2, VolumeX, Flame, Zap } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { TouchPoint, UserProfile } from '../types';
 
 interface TouchPulseModalProps {
@@ -31,10 +32,51 @@ export const TouchPulseModal: React.FC<TouchPulseModalProps> = ({
   const [localTouch, setLocalTouch] = useState<TouchPoint | null>(null);
   const [isHolding, setIsHolding] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [isThumbKissAligned, setIsThumbKissAligned] = useState(false);
+  const lastBurstTimeRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const heartbeatIntervalRef = useRef<any>(null);
 
   const isBothTouching = Boolean(localTouch?.isActive && remoteTouch?.isActive);
+
+  // Calculate distance between local and remote touch (in percentage coords)
+  const touchDistance = isBothTouching && localTouch && remoteTouch
+    ? Math.hypot(localTouch.x - remoteTouch.x, localTouch.y - remoteTouch.y)
+    : 1000;
+
+  const isCloseTogether = touchDistance < 14;
+
+  // Trigger ThumbKiss Fireworks & Haptics when fingers meet
+  useEffect(() => {
+    if (isBothTouching && isCloseTogether) {
+      setIsThumbKissAligned(true);
+      const now = Date.now();
+      if (now - lastBurstTimeRef.current > 1200) {
+        lastBurstTimeRef.current = now;
+        if (navigator.vibrate) {
+          navigator.vibrate([40, 80, 120, 200]);
+        }
+        if (localTouch && remoteTouch) {
+          const avgX = (localTouch.x + remoteTouch.x) / 2 / 100;
+          const avgY = (localTouch.y + remoteTouch.y) / 2 / 100;
+          try {
+            confetti({
+              particleCount: 45,
+              spread: 70,
+              origin: { x: avgX, y: avgY },
+              colors: ['#f43f5e', '#fbbf24', '#ec4899', '#ffffff'],
+              shapes: ['circle'],
+              scalar: 1.2,
+            });
+          } catch {
+            // Confetti fallback
+          }
+        }
+      }
+    } else {
+      setIsThumbKissAligned(false);
+    }
+  }, [isBothTouching, isCloseTogether, localTouch, remoteTouch]);
 
   // Play gentle heartbeat pulse oscillator sound
   const playHeartbeatSound = useCallback(() => {
@@ -152,25 +194,36 @@ export const TouchPulseModal: React.FC<TouchPulseModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-xl animate-in fade-in select-none">
-      <div className="relative w-full max-w-4xl h-[90vh] max-h-[750px] bg-slate-950 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-xl animate-in fade-in select-none">
+      <div className="relative w-full max-w-4xl h-[100dvh] sm:h-[90vh] sm:max-h-[750px] bg-slate-950 border-0 sm:border border-slate-800 rounded-none sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col">
         {/* Top Control Bar */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-900/60 border-b border-slate-800/80 backdrop-blur-md z-30 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 to-amber-500 text-white flex items-center justify-center shadow-lg shadow-rose-500/20 animate-pulse">
-              <Hand className="w-5 h-5" />
+        <div className="flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-slate-900/60 border-b border-slate-800/80 backdrop-blur-md z-30 shrink-0 sticky top-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-touch-mobile-back"
+              className="p-1.5 -ml-1 text-rose-400 hover:bg-slate-800 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-rose-600 to-amber-500 text-white flex items-center justify-center shadow-lg shadow-rose-500/20 animate-pulse shrink-0">
+              <Hand className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white">Touch Pulse</h3>
-                <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30">
-                  Virtual Hand Holding
+                <h3 className="text-sm sm:text-base font-bold text-white truncate">Touch Pulse</h3>
+                <span className="hidden xs:inline-block px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30 shrink-0">
+                  Virtual Touch
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
                 {isBothTouching
-                  ? '✨ Connected! You are holding each other\'s hands across distance.'
-                  : `Press & hold the screen. When ${partner ? partner.name : partnerName} touches too, you will feel each other.`}
+                  ? '✨ Connected! Holding hands across distance.'
+                  : `Press & hold to feel ${partner ? partner.name : partnerName}.`}
               </p>
             </div>
           </div>
@@ -293,16 +346,24 @@ export const TouchPulseModal: React.FC<TouchPulseModalProps> = ({
           {/* Status Badge in Center bottom */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
             <div className={`px-4 py-2 rounded-full border backdrop-blur-md text-xs font-bold shadow-xl flex items-center gap-2 transition-all ${
-              isBothTouching
+              isThumbKissAligned
+                ? 'bg-gradient-to-r from-rose-500/80 to-amber-500/80 border-amber-300 text-white shadow-rose-500/50 scale-110 animate-pulse'
+                : isBothTouching
                 ? 'bg-rose-500/30 border-rose-400 text-rose-200 shadow-rose-500/30 scale-105'
                 : localTouch
                 ? 'bg-slate-900/80 border-slate-700 text-slate-300'
                 : 'bg-slate-900/60 border-slate-800 text-slate-400'
             }`}>
-              <Heart className={`w-4 h-4 ${isBothTouching ? 'text-rose-400 fill-rose-400 animate-bounce' : 'text-slate-500'}`} />
+              {isThumbKissAligned ? (
+                <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300 animate-spin" />
+              ) : (
+                <Heart className={`w-4 h-4 ${isBothTouching ? 'text-rose-400 fill-rose-400 animate-bounce' : 'text-slate-500'}`} />
+              )}
               <span>
-                {isBothTouching
-                  ? '✨ Holding Hands Together ✨'
+                {isThumbKissAligned
+                  ? '💋 THUMBKISS! Fingers Aligned Across Distance! 💋'
+                  : isBothTouching
+                  ? '✨ Holding Hands Together ✨ (Slide fingers closer for ThumbKiss)'
                   : localTouch
                   ? `Waiting for ${partner ? partner.name : partnerName} to touch...`
                   : remoteTouch?.isActive

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, CheckCircle2, Copy, Check, X, ShieldAlert, Sparkles, KeyRound } from 'lucide-react';
+import { ShieldCheck, ArrowLeft, Lock, CheckCircle2, Copy, Check, X, ShieldAlert, Sparkles, KeyRound } from 'lucide-react';
 
 interface SecurityVerifyModalProps {
   isOpen: boolean;
@@ -36,36 +36,47 @@ export const SecurityVerifyModal: React.FC<SecurityVerifyModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
       <div 
         id="security-verify-modal"
-        className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+        className="w-full max-w-md bg-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-100 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[90vh] animate-in fade-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="relative bg-slate-900 px-6 py-6 text-white">
-          <button
-            id="btn-close-security-modal"
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-          
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-              <ShieldCheck className="w-6 h-6" />
+        <div className="relative bg-slate-900 px-4 sm:px-6 py-4 sm:py-6 text-white shrink-0 sticky top-0 z-20 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-security-mobile-back"
+              className="p-1.5 -ml-1 text-emerald-400 hover:bg-slate-800 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <ShieldCheck className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-white">End-to-End Encryption</h2>
-              <p className="text-xs text-emerald-400 flex items-center gap-1 font-medium mt-0.5">
-                <Lock className="w-3 h-3" /> AES-256-GCM + DTLS-SRTP
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-bold text-white truncate">End-to-End Encryption</h2>
+              <p className="text-xs text-emerald-400 flex items-center gap-1 font-medium mt-0.5 truncate">
+                <Lock className="w-3 h-3 shrink-0" /> AES-256-GCM + DTLS-SRTP
               </p>
             </div>
           </div>
+
+          <button
+            id="btn-close-security-modal"
+            onClick={onClose}
+            className="p-2 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-5">
+        <div className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1">
           <p className="text-xs text-slate-600 leading-relaxed">
             Messages, voice notes, photos, and video/audio calls in this space are encrypted on your device. Only you and <span className="font-semibold text-slate-900">{partnerName}</span> possess the keys. Not even the server can inspect your conversations.
           </p>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   X,
+  ArrowLeft,
   Radio,
   Volume2,
   Sparkles,
@@ -57,25 +58,36 @@ export const SoundboardModal: React.FC<SoundboardModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div
-        className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200"
+        className="relative w-full max-w-xl bg-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-100 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[90vh] animate-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-rose-500/10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-md shadow-amber-500/20">
-              <Radio className="w-5 h-5 animate-pulse" />
+        <div className="px-3 sm:px-6 py-3 sm:py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-rose-500/10 sticky top-0 z-20 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-soundboard-mobile-back"
+              className="p-1.5 -ml-1 text-amber-700 hover:bg-amber-100 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-md shadow-amber-500/20 shrink-0">
+              <Radio className="w-4 h-4 sm:w-5 sm:h-5 animate-pulse" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="font-bold text-slate-800 text-lg">Live Soundboard</h3>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 uppercase tracking-wide">
+                <h3 className="font-bold text-slate-800 text-sm sm:text-lg truncate">Live Soundboard</h3>
+                <span className="hidden xs:inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 uppercase tracking-wide shrink-0">
                   Instant Sync
                 </span>
               </div>
-              <p className="text-xs text-slate-500">
+              <p className="text-[11px] sm:text-xs text-slate-500 truncate">
                 Trigger sound cues for both {currentUserName} and {partnerName} in real-time
               </p>
             </div>
@@ -92,7 +104,7 @@ export const SoundboardModal: React.FC<SoundboardModalProps> = ({
         </div>
 
         {/* Categories Bar */}
-        <div className="px-6 py-3 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between gap-2">
+        <div className="px-3.5 sm:px-6 py-2.5 sm:py-3 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
             {[
               { id: 'all', label: 'All Sounds', icon: Sparkles },
@@ -129,7 +141,7 @@ export const SoundboardModal: React.FC<SoundboardModalProps> = ({
         </div>
 
         {/* Sound Buttons Grid */}
-        <div className="p-6 overflow-y-auto flex-1">
+        <div className="p-3.5 sm:p-6 overflow-y-auto flex-1">
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {filteredSounds.map((sound) => {
               const isPlaying = lastPlayedId === sound.id;
@@ -188,7 +200,7 @@ export const SoundboardModal: React.FC<SoundboardModalProps> = ({
           <div className="mt-6 p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200/60 flex items-center gap-3">
             <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
             <p className="text-xs text-amber-900 leading-relaxed">
-              <span className="font-semibold">Pro-tip:</span> Sounds play synthesized Web Audio cues with zero delay. You can also trigger quick sound bites directly inside the chat composer.
+              <span className="font-semibold">Pro-tip:</span> Sounds play synthesized Web Audio cues with zero delay and sync instantly with your partner.
             </p>
           </div>
         </div>

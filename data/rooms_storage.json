@@ -1,0 +1,71 @@
+{
+  "haven-couple-c44c0f": {
+    "messages": [],
+    "canvasStrokes": [],
+    "timeCapsuleLetters": [],
+    "dailySpark": null,
+    "bucketList": [],
+    "locations": {
+      "user-1789902583476-8826": {
+        "city": "Kalimoni ward, Kiambu, Kenya",
+        "timezone": "Africa/Nairobi",
+        "latitude": -1.1299,
+        "longitude": 37.04,
+        "tempC": 17,
+        "tempF": 63,
+        "weatherCondition": "clear_night",
+        "updatedAt": 1790198531000
+      },
+      "user-1788024410866-9954": {
+        "city": "Kalimoni ward, Kiambu, Kenya",
+        "timezone": "Africa/Nairobi",
+        "latitude": -1.1299,
+        "longitude": 37.04,
+        "tempC": 17,
+        "tempF": 63,
+        "weatherCondition": "clear_night",
+        "updatedAt": 1790198456128
+      }
+    },
+    "createdAt": 1790082390716,
+    "createdBy": {
+      "id": "user-1789902583476-8826",
+      "name": "abdul"
+    },
+    "spaceType": "couple",
+    "roomName": "haven-couple-c44c0f",
+    "passkey": "sanctuary-love",
+    "invitedEmails": [],
+    "authorizedEmails": [],
+    "pendingDeletion": null
+  },
+  "haven-couple-abudaziz": {
+    "messages": [],
+    "canvasStrokes": [],
+    "timeCapsuleLetters": [],
+    "dailySpark": null,
+    "bucketList": [],
+    "locations": {
+      "user-1789902583476-8826": {
+        "city": "Kalimoni ward, Kiambu, Kenya",
+        "timezone": "Africa/Nairobi",
+        "latitude": -1.1299,
+        "longitude": 37.04,
+        "tempC": 18,
+        "tempF": 64,
+        "weatherCondition": "cloudy",
+        "updatedAt": 1790192216254
+      }
+    },
+    "createdAt": 1790082392682,
+    "createdBy": null,
+    "spaceType": "couple",
+    "roomName": "haven-couple-abudaziz",
+    "passkey": "sanctuary-love",
+    "invitedEmails": [
+      "abudmaitha08@gmail.com"
+    ],
+    "authorizedEmails": [],
+    "pendingDeletion": null
+  }
+}

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X,
+  ArrowLeft,
   Palette,
   Eraser,
   RotateCcw,
@@ -410,22 +411,33 @@ export const LiveCanvasModal: React.FC<LiveCanvasModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
-      <div className="relative w-full max-w-4xl h-[90vh] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
+      <div className="relative w-full max-w-4xl h-[100dvh] sm:h-[90vh] bg-slate-900 border-0 sm:border border-slate-800 rounded-none sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col">
         {/* Header Bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 bg-slate-900/90 border-b border-slate-800 shrink-0 z-20">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-rose-500 to-pink-500 text-white flex items-center justify-center shadow-md shadow-rose-500/20">
+        <div className="flex items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3 bg-slate-900/95 border-b border-slate-800 shrink-0 z-20 sticky top-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-canvas-mobile-back"
+              className="p-1.5 -ml-1 text-rose-400 hover:text-rose-300 hover:bg-slate-800 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-rose-500 to-pink-500 text-white flex items-center justify-center shadow-md shadow-rose-500/20 shrink-0">
               <Sparkles className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-bold text-white">Live Love Canvas</h3>
-                <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30">
+                <h3 className="text-sm sm:text-base font-bold text-white truncate">Live Love Canvas</h3>
+                <span className="hidden xs:inline-flex px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30 shrink-0">
                   Real-Time Sync
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
                 Drawing together with {partner ? partner.name : partnerName}
               </p>
             </div>

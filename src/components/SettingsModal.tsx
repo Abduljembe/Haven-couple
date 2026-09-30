@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   X,
+  ArrowLeft,
   Copy,
   Check,
   Heart,
@@ -14,9 +15,13 @@ import {
   Users,
   ShieldCheck,
   AlertTriangle,
+  Bell,
+  BellRing,
 } from 'lucide-react';
-import { CoupleSpaceConfig } from '../types';
+import { CoupleSpaceConfig, PendingSpaceDeletion } from '../types';
 import { AvatarPicker } from './AvatarPicker';
+import { PWAInstallButton } from './PWAInstallButton';
+import { getNotificationPermission, requestPushPermission, sendPushNotification } from '../utils/notifications';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -26,6 +31,9 @@ interface SettingsModalProps {
   onUpdateConfig: (updated: Partial<CoupleSpaceConfig>) => void;
   onWipeHistory: () => void;
   onLeaveSpace: () => void;
+  onOpenSpacesManager?: () => void;
+  onOpenMutualDeletion?: () => void;
+  pendingDeletion?: PendingSpaceDeletion | null;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -36,6 +44,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateConfig,
   onWipeHistory,
   onLeaveSpace,
+  onOpenSpacesManager,
+  onOpenMutualDeletion,
+  pendingDeletion,
 }) => {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -47,6 +58,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [partnerAvatar, setPartnerAvatar] = useState(config.partnerAvatar);
   const [anniversaryDate, setAnniversaryDate] = useState(config.anniversaryDate || '');
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [notificationPerm, setNotificationPerm] = useState(getNotificationPermission());
+  const [testNotificationSent, setTestNotificationSent] = useState(false);
+
+  const handleEnablePush = async () => {
+    const granted = await requestPushPermission();
+    setNotificationPerm(getNotificationPermission());
+    if (granted) {
+      await sendPushNotification({
+        title: 'Haven Notifications Activated 💕',
+        body: 'You will now receive incoming call rings and messages even when your phone is locked!',
+        tag: 'haven-welcome-push',
+      });
+      setTestNotificationSent(true);
+      setTimeout(() => setTestNotificationSent(false), 3000);
+    }
+  };
+
+  const handleTestPush = async () => {
+    await sendPushNotification({
+      title: 'Haven Ring Test 🔔',
+      body: 'Lock-screen and background push notification working perfectly!',
+      tag: 'haven-test',
+    });
+    setTestNotificationSent(true);
+    setTimeout(() => setTestNotificationSent(false), 3000);
+  };
 
   if (!isOpen) return null;
 
@@ -97,26 +134,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
       <div 
         id="settings-modal-card"
-        className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200"
+        className="w-full max-w-lg bg-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-100 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[85vh] animate-in fade-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="relative bg-gradient-to-r from-rose-500 to-pink-500 px-6 py-5 text-white flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Heart className="w-5 h-5 fill-white" />
-            <h2 className="text-lg font-bold font-serif">Space Settings & Invite</h2>
+        <div className={`relative px-4 sm:px-6 py-4 sm:py-5 text-white flex items-center justify-between shrink-0 sticky top-0 z-20 ${
+          isFriends ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-violet-700' : 'bg-gradient-to-r from-rose-500 to-pink-500'
+        }`}>
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-settings-mobile-back"
+              className="p-1.5 -ml-1 text-white hover:bg-white/20 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="p-2 rounded-xl bg-white/20 backdrop-blur-xs shrink-0">
+              {isFriends ? (
+                <Users className="w-5 h-5 text-white" />
+              ) : (
+                <Heart className="w-5 h-5 fill-white text-white" />
+              )}
+            </div>
+            <h2 className="text-base sm:text-lg font-bold font-serif truncate">
+              {isFriends ? 'Squad Settings & Invite' : 'Space Settings & Invite'}
+            </h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 space-y-6 overflow-y-auto flex-1">
           {/* Invite Box */}
           <div className={`${isFriends ? 'bg-indigo-50/70 border-indigo-100' : 'bg-rose-50/70 border-rose-100'} border rounded-2xl p-4`}>
             <div className="flex items-center gap-2 text-slate-800 font-bold text-sm mb-1">
@@ -263,28 +321,134 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
 
-            {/* Anniversary Date */}
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Relationship Start Date / Anniversary
-              </label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="date"
-                  value={anniversaryDate}
-                  onChange={(e) => setAnniversaryDate(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
-                />
+            {/* Anniversary Date (Only in Couple Space) */}
+            {!isFriends && (
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Relationship Start Date / Anniversary
+                </label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="date"
+                    value={anniversaryDate}
+                    onChange={(e) => setAnniversaryDate(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Web Push & Lock Screen Notifications */}
+          <div className="pt-4 border-t border-slate-100 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                <BellRing className="w-3.5 h-3.5 text-rose-500" />
+                <span>Web Push & Lock-Screen Alerts</span>
+              </h3>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                notificationPerm === 'granted'
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+              }`}>
+                {notificationPerm === 'granted' ? 'Active 🔔' : 'Not Enabled'}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-500/10 via-pink-500/5 to-purple-500/10 border border-rose-500/20 space-y-2.5">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Receive real-time incoming call rings and messages even when Haven is minimized, in the background, or your phone screen is locked.
+              </p>
+
+              <div className="flex items-center gap-2">
+                {notificationPerm !== 'granted' ? (
+                  <button
+                    type="button"
+                    id="btn-enable-push-notifications"
+                    onClick={handleEnablePush}
+                    className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>Enable Lock-Screen Alerts</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    id="btn-test-push-notifications"
+                    onClick={handleTestPush}
+                    className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <BellRing className="w-3.5 h-3.5 text-rose-400" />
+                    <span>{testNotificationSent ? 'Test Alert Sent! 🔔' : 'Send Test Notification'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Danger Zone: Wipe Chat / Leave Space */}
-          <div className="pt-4 border-t border-slate-100 space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-rose-600">
-              Privacy Controls
+          {/* Install Application (PWA) */}
+          <div className="pt-4 border-t border-slate-100 space-y-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+              Application & Mobile
             </h3>
+            <PWAInstallButton variant="full" />
+          </div>
+
+          {/* Space Deletion & Privacy Controls */}
+          <div className="pt-4 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-rose-600 flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5" /> Space Privacy & Permanence
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Indefinite Storage 🟢
+              </span>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] text-slate-600 leading-relaxed">
+              <p className="font-semibold text-slate-800 mb-1">
+                🔒 Permanent Space Guarantee:
+              </p>
+              <p>
+                {isFriends ? (
+                  'All shared photos, messages, voice notes, and canvas memories in this squad hangout are saved indefinitely.'
+                ) : (
+                  <>
+                    All shared photos, messages, voice notes, and canvas memories in this room are saved indefinitely. To protect your memories, a space can <span className="font-bold text-rose-600">only be permanently deleted if both members mutually agree</span>.
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* Mutual Permanent Deletion Button (Couple Space Only, never on Friends setting) */}
+            {onOpenMutualDeletion && !isFriends && (
+              <button
+                type="button"
+                id="btn-open-mutual-deletion-settings"
+                onClick={() => {
+                  onClose();
+                  onOpenMutualDeletion();
+                }}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer border ${
+                  pendingDeletion && pendingDeletion.status === 'pending'
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-md animate-pulse'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Trash2 className="w-4 h-4" />
+                  <span className="font-bold">
+                    {pendingDeletion && pendingDeletion.status === 'pending'
+                      ? '⚠️ Deletion Pending Agreement (Click to review)'
+                      : 'Permanently Delete Space (Mutual Agreement)'}
+                  </span>
+                </div>
+                <span className="text-[10px] uppercase font-bold opacity-80">
+                  {pendingDeletion ? 'Review' : 'Requires Both'}
+                </span>
+              </button>
+            )}
 
             {confirmWipe ? (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl space-y-2">
@@ -293,7 +457,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>Permanently wipe chat history?</span>
                 </div>
                 <p className="text-[11px] text-rose-700">
-                  This will delete all encrypted messages for both you and your partner. This cannot be undone.
+                  {isFriends
+                    ? 'This will delete all encrypted messages for everyone in this squad hangout. This cannot be undone.'
+                    : 'This will delete all encrypted messages for both you and your partner. This cannot be undone.'}
                 </p>
                 <div className="flex gap-2 pt-1">
                   <button
@@ -324,12 +490,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             )}
 
+            {onOpenSpacesManager && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenSpacesManager();
+                }}
+                className="w-full py-2.5 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <Users className="w-4 h-4 text-indigo-500" />
+                <span>Switch to Another Space</span>
+              </button>
+            )}
+
             <button
               onClick={onLeaveSpace}
               className="w-full py-2.5 px-4 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
-              <span>Leave / Switch Space</span>
+              <span>Leave Current Space</span>
             </button>
           </div>
         </div>

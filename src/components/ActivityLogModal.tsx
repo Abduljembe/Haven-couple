@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   FileText,
+  ArrowLeft,
   ShieldCheck,
   Phone,
   Video,
@@ -96,31 +97,44 @@ export const ActivityLogModal: React.FC<ActivityLogModalProps> = ({ isOpen, onCl
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
       <div
         id="activity-log-card"
-        className={`w-full max-w-3xl rounded-3xl border shadow-2xl flex flex-col max-h-[90vh] overflow-hidden ${
+        className={`w-full max-w-3xl rounded-none sm:rounded-3xl border-0 sm:border shadow-2xl flex flex-col h-[100dvh] sm:h-auto sm:max-h-[90vh] overflow-hidden ${
           isDark
             ? 'bg-slate-900 border-slate-800 text-slate-100'
             : 'bg-white border-rose-100 text-slate-900'
         }`}
       >
         {/* Header */}
-        <div className={`p-4 sm:p-5 border-b flex items-center justify-between gap-3 ${
-          isDark ? 'border-slate-800 bg-slate-950/40' : 'border-rose-100/80 bg-rose-50/40'
+        <div className={`p-3 sm:p-5 border-b flex items-center justify-between gap-2 shrink-0 sticky top-0 z-20 ${
+          isDark ? 'border-slate-800 bg-slate-950/95 backdrop-blur-md' : 'border-rose-100/80 bg-rose-50/95 backdrop-blur-md'
         }`}>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-activity-mobile-back"
+              className={`p-1.5 -ml-1 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden ${
+                isDark ? 'text-rose-400 hover:bg-slate-800' : 'text-rose-600 hover:bg-rose-100'
+              }`}
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
             <HavenLogo size="sm" />
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="font-serif font-bold text-base sm:text-lg">Website Activity & Audit Log</h3>
-                <span className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30">
+                <h3 className="font-serif font-bold text-sm sm:text-lg truncate">Activity & Audit Log</h3>
+                <span className="hidden xs:flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live Recording
+                  Live
                 </span>
               </div>
-              <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Client-side encrypted telemetry, WebRTC handshakes, cinema playback, and security verification audits.
+              <p className={`text-[11px] sm:text-xs truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                Telemetry, calls, cinema playback & security audits
               </p>
             </div>
           </div>

@@ -1,4 +1,4 @@
-export type ThemeId = 'rose' | 'sunset' | 'cosmic' | 'neon' | 'emerald' | 'bubblegum';
+export type ThemeId = 'whatsapp' | 'rose' | 'sunset' | 'cosmic' | 'neon' | 'emerald' | 'bubblegum';
 
 export interface ThemeConfig {
   id: ThemeId;
@@ -20,6 +20,28 @@ export interface ThemeConfig {
 }
 
 export const THEME_PRESETS: Record<ThemeId, ThemeConfig> = {
+  whatsapp: {
+    id: 'whatsapp',
+    name: 'Haven Dark',
+    emoji: '🟢',
+    tagline: 'Authentic Haven Black & Emerald Green',
+    primaryGradient: 'from-[#00a884] via-[#25d366] to-[#005c4b]',
+    buttonGradient: 'bg-[#00a884] hover:bg-[#02906f] text-white shadow-emerald-950/40',
+    canvasBg: 'bg-[#0b141a]',
+    ambientOrbs: [
+      'bg-[#00a884]/15',
+      'bg-[#25d366]/10',
+      'bg-[#005c4b]/15',
+    ],
+    headerBorder: 'border-[#222e35]',
+    userBubble: 'bg-[#005c4b] text-[#e9edef] shadow-black/20',
+    accentText: 'text-[#25d366]',
+    accentBg: 'bg-[#00a884]/15',
+    accentBorder: 'border-[#00a884]/30',
+    auraRing: 'ring-[#25d366]',
+    glowColor: '#25d366',
+    swatchColors: ['#0b141a', '#00a884', '#005c4b'],
+  },
   rose: {
     id: 'rose',
     name: 'Rose Velvet',
@@ -162,12 +184,8 @@ export function getSavedColorMode(): ColorMode {
     if (saved === 'light' || saved === 'dark') {
       return saved;
     }
-    // Check if user has a system preference for dark mode
-    if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
-    }
   } catch {}
-  return 'light';
+  return 'dark';
 }
 
 export function saveColorMode(mode: ColorMode) {
@@ -183,7 +201,7 @@ export function getSavedTheme(): ThemeId {
       return saved as ThemeId;
     }
   } catch {}
-  return 'rose';
+  return 'whatsapp';
 }
 
 export function saveTheme(themeId: ThemeId) {

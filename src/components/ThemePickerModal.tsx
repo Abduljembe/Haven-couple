@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Sparkles, Check, Wallpaper } from 'lucide-react';
+import { X, ArrowLeft, Sparkles, Check, Wallpaper } from 'lucide-react';
 import { THEME_PRESETS, ThemeId } from '../utils/theme';
 
 interface ThemePickerModalProps {
@@ -20,32 +20,43 @@ export const ThemePickerModal: React.FC<ThemePickerModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
       <div 
         id="theme-picker-card"
-        className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden my-auto animate-in zoom-in-95 duration-200"
+        className="w-full max-w-lg bg-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-100 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[85vh] animate-in zoom-in-95 duration-200"
       >
         {/* Modal Header */}
-        <div className="relative bg-gradient-to-r from-violet-600 via-pink-600 to-amber-500 px-6 py-5 text-white flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-white/20 backdrop-blur-xs">
+        <div className="relative bg-gradient-to-r from-violet-600 via-pink-600 to-amber-500 px-3 sm:px-6 py-3 sm:py-5 text-white flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-theme-mobile-back"
+              className="p-1.5 -ml-1 text-white hover:bg-white/20 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="p-2 rounded-xl bg-white/20 backdrop-blur-xs shrink-0">
               <Sparkles className="w-5 h-5 text-yellow-300 fill-yellow-300 animate-spin" style={{ animationDuration: '6s' }} />
             </div>
-            <div>
-              <h2 className="text-lg font-bold font-serif">Color Palette & Atmosphere</h2>
-              <p className="text-xs text-white/80">Customize the colors, glow, and vibe of your space</p>
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold font-serif truncate">Theme & Atmosphere</h2>
+              <p className="text-[11px] sm:text-xs text-white/80 truncate">Customize space colors and glow</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Theme Grid */}
-        <div className="p-6 space-y-3 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 space-y-3 overflow-y-auto flex-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {Object.values(THEME_PRESETS).map((theme) => {
               const isSelected = currentThemeId === theme.id;
@@ -126,7 +137,7 @@ export const ThemePickerModal: React.FC<ThemePickerModalProps> = ({
               className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1.5 cursor-pointer hover:underline"
             >
               <Wallpaper className="w-4 h-4 text-emerald-600" />
-              <span>Customize WhatsApp Wallpaper →</span>
+              <span>Customize Haven Wallpaper →</span>
             </button>
           ) : (
             <div />

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Chess, Square, Move } from 'chess.js';
 import {
   X,
+  ArrowLeft,
   RotateCcw,
   Flag,
   Handshake,
@@ -89,7 +90,7 @@ const ChessPiece: React.FC<{ type: string; color: 'w' | 'b'; className?: string 
           : 'text-stone-900 drop-shadow-[0_1px_2px_rgba(255,255,255,0.4)]'
       } ${className}`}
       style={{
-        fontSize: 'clamp(28px, 6vw, 46px)',
+        fontSize: 'clamp(24px, 7.5vw, 46px)',
         textShadow: isWhite
           ? '-1px -1px 0 #333, 1px -1px 0 #333, -1px 1px 0 #333, 1px 1px 0 #333, 0 3px 6px rgba(0,0,0,0.7)'
           : '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 2px 4px rgba(0,0,0,0.5)',
@@ -140,6 +141,9 @@ export const ChessModal: React.FC<ChessModalProps> = ({
   const [showCamPiP, setShowCamPiP] = useState(true);
   const [isPiPMinimized, setIsPiPMinimized] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [isFullScreenBoard, setIsFullScreenBoard] = useState(false);
+  const [showMobileHistory, setShowMobileHistory] = useState(false);
+  const [showMobileReactions, setShowMobileReactions] = useState(false);
 
   // Background call timer
   useEffect(() => {
@@ -541,29 +545,40 @@ export const ChessModal: React.FC<ChessModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-md animate-fade-in">
       <div
         id="live-chess-modal"
-        className="w-full max-w-4xl bg-slate-900 text-white rounded-3xl shadow-2xl border border-slate-700/80 overflow-hidden flex flex-col max-h-[96vh] transition-all"
+        className="w-full max-w-4xl bg-slate-900 text-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-700/80 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[96vh] transition-all"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-5 py-3.5 bg-gradient-to-r from-slate-900 via-stone-900 to-slate-900 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-xs">
-              <Swords className="w-5 h-5" />
+        <div className="px-3 sm:px-5 py-2.5 sm:py-3.5 bg-gradient-to-r from-slate-900 via-stone-900 to-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              id="btn-chess-mobile-back"
+              onClick={onClose}
+              className="p-1.5 -ml-1 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-xs shrink-0">
+              <Swords className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-1.5">
-                  <span>Live Chess with Partner</span>
+                <h2 className="text-sm sm:text-lg font-bold text-white flex items-center gap-1.5 truncate">
+                  <span>Live Chess</span>
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                <span className="hidden xs:inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/30 shrink-0">
                   REAL-TIME SYNC
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Play standard live chess with checkmate, captured pieces, and move sounds
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Play standard live chess with checkmate & move sounds
               </p>
             </div>
           </div>
@@ -691,6 +706,16 @@ export const ChessModal: React.FC<ChessModalProps> = ({
 
             <button
               type="button"
+              onClick={() => setIsFullScreenBoard((prev) => !prev)}
+              className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                isFullScreenBoard ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-400' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title={isFullScreenBoard ? 'Exit Full Screen Board' : 'Full Screen Board View'}
+            >
+              {isFullScreenBoard ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button
+              type="button"
               onClick={() => setSoundEnabled(!soundEnabled)}
               className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
               title={soundEnabled ? 'Mute Sounds' : 'Unmute Sounds'}
@@ -707,8 +732,70 @@ export const ChessModal: React.FC<ChessModalProps> = ({
           </div>
         </div>
 
-        {/* Players & Active Turn Status Bar */}
-        <div className="px-4 py-2.5 bg-slate-950/80 border-b border-slate-800/80 flex items-center justify-between gap-2 sm:gap-4 flex-wrap">
+        {/* Mobile Compact Player & Turn Ribbon (sm:hidden) */}
+        <div className="sm:hidden px-2.5 py-1.5 bg-slate-950/95 border-b border-slate-800 flex items-center justify-between text-xs gap-1.5 shrink-0">
+          {/* Partner */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-700 ring-1 ring-slate-600 shrink-0">
+              {partner?.avatar || partnerAvatar ? (
+                <img
+                  src={partner?.avatar || partnerAvatar}
+                  alt={partnerName}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center font-bold text-[10px]">
+                  {partnerName.charAt(0)}
+                </div>
+              )}
+              {currentTurn !== myColor && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              )}
+            </div>
+            <span className="font-bold text-white text-[11px] truncate max-w-[68px]">{partnerName}</span>
+            <span className="text-[10px] text-slate-400 font-mono">({myColor === 'w' ? '♚' : '♔'})</span>
+            <span className="text-[10px] text-amber-400 font-bold font-mono">{scores.partner}</span>
+          </div>
+
+          {/* Center Turn Status */}
+          <div className="shrink-0 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-[10px] font-bold">
+            {chess.inCheck() ? (
+              <span className="text-rose-400 font-extrabold animate-pulse">⚠️ CHECK</span>
+            ) : isMyTurn ? (
+              <span className="text-emerald-400 animate-pulse flex items-center gap-1 font-extrabold">
+                <Sparkles className="w-2.5 h-2.5" /> Your Move
+              </span>
+            ) : (
+              <span className="text-slate-400">Thinking...</span>
+            )}
+          </div>
+
+          {/* You */}
+          <div className="flex items-center gap-1.5 min-w-0 justify-end">
+            <span className="text-[10px] text-emerald-400 font-bold font-mono">{scores.me}</span>
+            <span className="text-[10px] text-slate-400 font-mono">({myColor === 'w' ? '♔' : '♚'})</span>
+            <span className="font-bold text-white text-[11px] truncate max-w-[65px]">{currentUserName}</span>
+            <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-700 ring-1 ring-slate-600 shrink-0">
+              {currentUserAvatar ? (
+                <img
+                  src={currentUserAvatar}
+                  alt={currentUserName}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center font-bold text-[10px]">
+                  {currentUserName.charAt(0)}
+                </div>
+              )}
+              {isMyTurn && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop Players & Active Turn Status Bar (hidden sm:flex) */}
+        <div className="hidden sm:flex px-4 py-2.5 bg-slate-950/80 border-b border-slate-800/80 items-center justify-between gap-2 sm:gap-4 flex-wrap">
           {/* Top Player (Opponent/Partner) */}
           <div
             className={`flex items-center gap-2.5 px-3 py-1.5 rounded-xl border transition-all ${
@@ -855,14 +942,14 @@ export const ChessModal: React.FC<ChessModalProps> = ({
         )}
 
         {/* Main Chess Area & Controls */}
-        <div className="p-3 sm:p-5 flex-1 overflow-y-auto flex flex-col lg:flex-row items-center justify-center gap-4 lg:gap-6 bg-slate-900">
+        <div className="p-1 sm:p-4 lg:p-5 flex-1 overflow-y-auto flex flex-col lg:flex-row items-center justify-start lg:justify-center gap-1 sm:gap-3 lg:gap-6 bg-slate-900">
           {/* Left / Center: 8x8 Chessboard */}
-          <div className="relative flex flex-col items-center select-none">
+          <div className="relative flex flex-col items-center select-none w-full max-w-fit">
             {/* Captured Pieces of Opponent */}
-            <div className="w-full flex items-center justify-between text-xs mb-1 px-1 min-h-[24px]">
+            <div className="w-full flex items-center justify-between text-xs mb-1 px-1 min-h-[20px]">
               <div className="flex items-center gap-1 text-slate-400">
-                <span className="text-[11px] font-semibold">Captured:</span>
-                <div className="flex items-center gap-0.5 text-base">
+                <span className="text-[10px] sm:text-[11px] font-semibold">Captured:</span>
+                <div className="flex items-center gap-0.5 text-sm sm:text-base">
                   {(myColor === 'w' ? capturedPieces.blackLost : capturedPieces.whiteLost).map((item, idx) => (
                     <span key={idx} className="opacity-90">
                       {item.count > 1 ? `${item.count}×` : ''}
@@ -882,8 +969,14 @@ export const ChessModal: React.FC<ChessModalProps> = ({
             </div>
 
             {/* The 8x8 Board Grid */}
-            <div className="relative border-4 border-stone-800 rounded-xl overflow-hidden shadow-2xl bg-stone-900">
-              <div className="grid grid-cols-8 grid-rows-8 w-[min(84vw,420px)] h-[min(84vw,420px)] sm:w-[440px] sm:h-[440px]">
+            <div className="relative border-2 sm:border-4 border-stone-800 rounded-xl overflow-hidden shadow-2xl bg-stone-900">
+              <div
+                className={`grid grid-cols-8 grid-rows-8 transition-all ${
+                  isFullScreenBoard
+                    ? 'w-[min(calc(100vw-8px),calc(100dvh-120px),520px)] h-[min(calc(100vw-8px),calc(100dvh-120px),520px)]'
+                    : 'w-[min(calc(100vw-12px),calc(100dvh-180px),460px)] h-[min(calc(100vw-12px),calc(100dvh-180px),460px)] sm:w-[440px] sm:h-[440px] lg:w-[460px] lg:h-[460px]'
+                }`}
+              >
                 {displayRanks.map((rank) =>
                   displayFiles.map((file) => {
                     const square = (file + rank) as Square;
@@ -945,7 +1038,7 @@ export const ChessModal: React.FC<ChessModalProps> = ({
                             {piece ? (
                               <div className="w-full h-full border-4 border-amber-500/80 rounded-full animate-ping opacity-75" />
                             ) : (
-                              <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-900/35 backdrop-blur-xs" />
+                              <div className="w-3 sm:w-3.5 h-3 sm:h-3.5 rounded-full bg-slate-900/40 backdrop-blur-xs" />
                             )}
                           </div>
                         )}
@@ -1034,10 +1127,10 @@ export const ChessModal: React.FC<ChessModalProps> = ({
             </div>
 
             {/* Captured Pieces of Self */}
-            <div className="w-full flex items-center justify-between text-xs mt-1 px-1 min-h-[24px]">
+            <div className="w-full flex items-center justify-between text-xs mt-1 px-1 min-h-[20px]">
               <div className="flex items-center gap-1 text-slate-400">
-                <span className="text-[11px] font-semibold">Lost:</span>
-                <div className="flex items-center gap-0.5 text-base">
+                <span className="text-[10px] sm:text-[11px] font-semibold">Lost:</span>
+                <div className="flex items-center gap-0.5 text-sm sm:text-base">
                   {(myColor === 'w' ? capturedPieces.whiteLost : capturedPieces.blackLost).map((item, idx) => (
                     <span key={idx} className="opacity-90">
                       {item.count > 1 ? `${item.count}×` : ''}
@@ -1055,10 +1148,132 @@ export const ChessModal: React.FC<ChessModalProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Mobile Quick Action Buttons (<lg screens) */}
+            <div className="w-full max-w-[460px] mt-1.5 flex flex-col gap-1.5 lg:hidden">
+              <div className="grid grid-cols-5 gap-1 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setMyColor((prev) => (prev === 'w' ? 'b' : 'w'))}
+                  className="py-1.5 px-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border border-slate-700"
+                  title="Flip Board"
+                >
+                  <RotateCcw className="w-3 h-3 text-amber-400" />
+                  <span>Flip</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOfferDraw}
+                  disabled={Boolean(gameOutcome.status)}
+                  className="py-1.5 px-1 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-indigo-300 font-semibold flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border border-slate-700"
+                  title="Offer Draw"
+                >
+                  <Handshake className="w-3 h-3 text-indigo-400" />
+                  <span>Draw</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResign}
+                  disabled={Boolean(gameOutcome.status)}
+                  className="py-1.5 px-1 rounded-xl bg-slate-800 hover:bg-rose-900/40 disabled:opacity-40 text-rose-300 font-semibold flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border border-slate-700"
+                  title="Resign"
+                >
+                  <Flag className="w-3 h-3 text-rose-400" />
+                  <span>Resign</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMobileReactions((prev) => !prev)}
+                  className={`py-1.5 px-1 rounded-xl font-semibold flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border ${
+                    showMobileReactions
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-400'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  }`}
+                  title="Cues & Emotes"
+                >
+                  <Smile className="w-3 h-3 text-amber-400" />
+                  <span>Emotes</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMobileHistory((prev) => !prev)}
+                  className={`py-1.5 px-1 rounded-xl font-semibold flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer border ${
+                    showMobileHistory
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-400'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  }`}
+                  title="Move History"
+                >
+                  <Clock className="w-3 h-3 text-indigo-400" />
+                  <span>Moves ({history.length})</span>
+                </button>
+              </div>
+
+              {/* Collapsible Mobile Reactions Shelf */}
+              {showMobileReactions && (
+                <div className="p-2 bg-slate-800/90 rounded-xl border border-slate-700 flex flex-wrap gap-1 justify-center animate-fade-in">
+                  {[
+                    'Good move! 👏',
+                    'Thinking... 🤔',
+                    'Checkmate coming! 😈',
+                    'Oops 🙈',
+                    'Love you 💕',
+                    'Mercy please! 🏳️',
+                  ].map((msg) => (
+                    <button
+                      key={msg}
+                      type="button"
+                      onClick={() => {
+                        sendReaction(msg);
+                        setShowMobileReactions(false);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-medium transition-all active:scale-95 cursor-pointer"
+                    >
+                      {msg}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Collapsible Mobile History Shelf */}
+              {showMobileHistory && (
+                <div className="p-2 bg-slate-800/90 rounded-xl border border-slate-700 max-h-32 overflow-y-auto space-y-1 font-mono text-[11px] animate-fade-in">
+                  <div className="text-[10px] font-bold text-slate-400 pb-1 border-b border-slate-700 flex items-center justify-between">
+                    <span>Moves History ({history.length})</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowMobileHistory(false)}
+                      className="text-slate-400 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {history.length === 0 ? (
+                    <div className="text-center py-2 text-slate-500 text-[10px]">No moves yet</div>
+                  ) : (
+                    Array.from({ length: Math.ceil(history.length / 2) }).map((_, roundIdx) => {
+                      const whiteMove = history[roundIdx * 2];
+                      const blackMove = history[roundIdx * 2 + 1];
+                      return (
+                        <div key={roundIdx} className="flex items-center justify-between px-1 text-[11px]">
+                          <span className="text-slate-500 w-5">{roundIdx + 1}.</span>
+                          <span className="flex-1 text-slate-200 font-semibold">{whiteMove}</span>
+                          <span className="flex-1 text-slate-400">{blackMove || ''}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Right Panel: Moves History & Live Controls */}
-          <div className="w-full lg:w-72 flex flex-col gap-3">
+          {/* Right Panel: Moves History & Live Controls (Desktop lg:flex) */}
+          <div className="hidden lg:flex w-72 flex-col gap-3 shrink-0">
             {/* Live Background Call / Talk Card */}
             <div
               className={`p-3 rounded-2xl border transition-all ${
@@ -1455,7 +1670,7 @@ export const ChessModal: React.FC<ChessModalProps> = ({
         )}
 
         {/* Remote Call Audio Stream Element */}
-        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+        <audio ref={remoteAudioRef} autoPlay playsInline className="fixed -top-96 -left-96 w-1 h-1 opacity-0 pointer-events-none" />
       </div>
     </div>
   );

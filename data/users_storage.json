@@ -1,0 +1,41 @@
+[
+  {
+    "id": "usr_1789826060164_69c44c0f",
+    "email": "abudmaitha08@gmail.com",
+    "name": "abdul",
+    "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    "passwordHash": "df8989f63141ae13e29b734dc5042d47af6033f46416cf065bc64445471bf57ed5a6ecef200935896c196a68acc7f6a5c79f1ee3afd6354805f092842c33e6ff",
+    "salt": "302233ecf85e4a367cf4b57e64aa6336",
+    "createdAt": 1789826060171,
+    "spaces": [
+      "haven-couple-abudaziz"
+    ]
+  },
+  {
+    "id": "user-1789902583476-8826",
+    "name": "abdul",
+    "email": "abdul_8826@haven.local",
+    "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    "createdAt": 1790082390716,
+    "lastActive": 1790764744139,
+    "spaces": [
+      "haven-couple-c44c0f",
+      "haven-couple-abudaziz"
+    ],
+    "origin": "space_session"
+  },
+  {
+    "id": "user-1788024410866-9954",
+    "name": "Mullah",
+    "email": "6-9954@haven.local",
+    "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    "createdAt": 1790198456128,
+    "lastActive": 1790764747179,
+    "spaces": [
+      "haven-couple-c44c0f",
+      "haven-couple-abudaziz",
+      "tender-cove-9928"
+    ],
+    "origin": "space_session"
+  }
+]

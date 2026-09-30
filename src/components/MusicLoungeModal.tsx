@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Music,
+  ArrowLeft,
   Play,
   Pause,
   SkipForward,
@@ -17,9 +18,13 @@ import {
   Globe,
   Upload,
   Tv,
+  Disc,
+  Headphones,
 } from 'lucide-react';
 import { MusicTrack, SyncMusicState } from '../types';
 import { musicEngine } from '../utils/musicEngine';
+import { useHavenVoiceAssistant } from '../hooks/useHavenVoiceAssistant';
+import { HavenVoiceControl } from './HavenVoiceControl';
 
 interface MusicLoungeModalProps {
   isOpen: boolean;
@@ -69,8 +74,8 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
   const [uploadingAudio, setUploadingAudio] = useState(false);
 
   const [currentTime, setCurrentTime] = useState(0);
-  const [volume, setVolume] = useState(syncMusicState.volume ?? 0.7);
-  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(() => musicEngine.getVolume());
+  const [isMuted, setIsMuted] = useState(() => musicEngine.getVolume() === 0);
   const [customUrlInput, setCustomUrlInput] = useState('');
   const [customTitleInput, setCustomTitleInput] = useState('');
 
@@ -81,7 +86,8 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
   const currentlyPlayingTrack = syncMusicState.customTrack || DEFAULT_WEB_TRACK;
 
-  // Keep audio engine synchronized with syncMusicState
+  // Keep audio engine synchronized with syncMusicState (track, play/pause, seek)
+  // NOTE: Device volume remains 100% individual and local to each user's phone/computer
   useEffect(() => {
     if (syncMusicState.isPlaying) {
       const engineTrack = musicEngine.getCurrentTrack();
@@ -289,9 +295,9 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
         const y = canvas.height - barHeight;
 
         const grad = ctx.createLinearGradient(0, y, 0, canvas.height);
-        grad.addColorStop(0, '#ec4899');
-        grad.addColorStop(0.5, '#a855f7');
-        grad.addColorStop(1, '#6366f1');
+        grad.addColorStop(0, '#1ed760');
+        grad.addColorStop(0.5, '#1DB954');
+        grad.addColorStop(1, '#116e2e');
 
         ctx.fillStyle = grad;
         ctx.beginPath();
@@ -376,21 +382,79 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
-    setVolume(val);
-    setIsMuted(val === 0);
-    musicEngine.setVolume(val);
-    onUpdateSyncState({ volume: val });
+    const clamped = Math.max(0, Math.min(1, val));
+    setVolume(clamped);
+    setIsMuted(clamped === 0);
+    musicEngine.setVolume(clamped);
   };
 
   const handleToggleMute = () => {
     if (isMuted) {
-      musicEngine.setVolume(volume || 0.7);
+      const restored = volume > 0 ? volume : 0.75;
+      setVolume(restored);
       setIsMuted(false);
+      musicEngine.setVolume(restored);
     } else {
-      musicEngine.setVolume(0);
       setIsMuted(true);
+      musicEngine.setVolume(0);
     }
   };
+
+  // Alexa-style Voice Recognition Assistant for Music Lounge
+  const handleVoicePlayMusic = async (query: string) => {
+    setIsSearching(true);
+    setSearchQuery(query);
+    setActiveTab('search');
+    try {
+      const tracks = await searchPublicMusicApi(query);
+      if (tracks.length > 0) {
+        setSearchResults(tracks);
+        handleSelectTrack(tracks[0]);
+      }
+    } catch (err) {
+      console.warn('Voice play music error:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const voiceAssistant = useHavenVoiceAssistant({
+    context: 'music',
+    onPlayQuery: handleVoicePlayMusic,
+    onPlayVideoQuery: (_query) => {
+      if (onOpenWatchTogether) {
+        onClose();
+        onOpenWatchTogether();
+      }
+    },
+    onPause: () => {
+      if (syncMusicState.isPlaying) handleTogglePlay();
+    },
+    onResume: () => {
+      if (!syncMusicState.isPlaying) handleTogglePlay();
+    },
+    onNext: handleNextTrack,
+    onPrevious: handlePrevTrack,
+    onVolumeUp: () => {
+      const nextV = Math.min(1, Math.round((musicEngine.getVolume() + 0.15) * 100) / 100);
+      setVolume(nextV);
+      setIsMuted(false);
+      musicEngine.setVolume(nextV);
+    },
+    onVolumeDown: () => {
+      const nextV = Math.max(0, Math.round((musicEngine.getVolume() - 0.15) * 100) / 100);
+      setVolume(nextV);
+      musicEngine.setVolume(nextV);
+    },
+    onMute: () => {
+      setIsMuted(true);
+      musicEngine.setVolume(0);
+    },
+    onUnmute: () => {
+      setIsMuted(false);
+      musicEngine.setVolume(volume || 0.75);
+    },
+  });
 
   const handlePlayCustomStream = (e: React.FormEvent) => {
     e.preventDefault();
@@ -450,41 +514,73 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-purple-100 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200">
+      <div className="relative w-full max-w-2xl bg-gradient-to-b from-[#0f2d18]/70 via-[#121212] to-[#0a0a0a] text-white rounded-none sm:rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.95)] border-0 sm:border border-white/10 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[92vh]">
+        {/* Ambient Spotify Mesh Lighting Glow */}
+        <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-[520px] h-[320px] bg-gradient-to-b from-[#1DB954]/30 via-[#1DB954]/10 to-transparent blur-3xl pointer-events-none rounded-full" />
+        <div className="absolute top-1/2 -right-24 w-[300px] h-[300px] bg-[#1DB954]/10 blur-3xl pointer-events-none rounded-full" />
+
         {/* Header */}
-        <div className="px-5 py-4 bg-gradient-to-r from-purple-700 via-pink-600 to-rose-500 text-white flex items-center justify-between shrink-0 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center">
-              <Music className="w-5 h-5 text-white animate-pulse" />
+        <div className="px-3 sm:px-5 py-3 sm:py-3.5 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-white/10 text-white flex items-center justify-between shrink-0 shadow-sm sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-music-mobile-back"
+              className="p-1.5 -ml-1 text-white hover:bg-white/10 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat (Music keeps playing)"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            {/* Spotify Green Icon */}
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#1DB954] shadow-lg shadow-[#1DB954]/30 flex items-center justify-center shrink-0 text-black">
+              <Headphones className="w-4 h-4 sm:w-5 sm:h-5 text-black stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-bold flex items-center gap-2">
-                Live Web Music Lounge
-                <span className="text-[10px] font-bold uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full">
-                  Direct Web Streaming 🌐
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-base font-black flex items-center gap-1.5 sm:gap-2 truncate tracking-tight text-white">
+                <span>Spotify Lounge</span>
+                <span className="hidden xs:inline-block text-[10px] font-bold uppercase tracking-wider bg-[#1DB954]/20 text-[#1ed760] border border-[#1DB954]/40 px-2 py-0.5 rounded-full shrink-0">
+                  Spotify Style 🟢
                 </span>
               </h2>
-              <p className="text-xs text-pink-100 flex items-center gap-1.5">
-                <Users className="w-3 h-3 text-pink-200" />
-                <span>
-                  Listening with <strong className="text-white">{partnerName || 'Partner'}</strong>
+              <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate">
+                <Users className="w-3 h-3 text-[#1DB954] shrink-0" />
+                <span className="truncate">
+                  Listening with <strong className="text-zinc-200">{partnerName || 'Partner'}</strong>
                 </span>
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping ml-1" />
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#1DB954] animate-ping ml-1 shrink-0" />
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Alexa-style Voice Assistant Pill */}
+            <HavenVoiceControl
+              isListening={voiceAssistant.isListening}
+              isHandsFree={voiceAssistant.isHandsFree}
+              transcript={voiceAssistant.transcript}
+              interimTranscript={voiceAssistant.interimTranscript}
+              lastActionMessage={voiceAssistant.lastActionMessage}
+              errorNotice={voiceAssistant.errorNotice}
+              isSpeaking={voiceAssistant.isSpeaking}
+              isSupported={voiceAssistant.isSupported}
+              onToggleHandsFree={voiceAssistant.toggleHandsFree}
+              onTriggerPushToTalk={voiceAssistant.triggerPushToTalk}
+              context="music"
+              variant="pill"
+            />
+
             <button
               onClick={onClose}
-              className="px-2.5 py-1 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+              className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all border border-white/10"
               title="Close modal and continue listening in background while chatting"
             >
-              <span>Minimize to Chat</span>
+              <span>Minimize</span>
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-full bg-white/5 hover:bg-white/15 text-zinc-400 hover:text-white transition-colors cursor-pointer"
               title="Close modal (Music plays in background)"
             >
               <X className="w-5 h-5" />
@@ -492,64 +588,75 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
           </div>
         </div>
 
+        {/* Shared DJ Parity Control Banner */}
+        <div className="px-4 py-2 bg-[#181818] border-b border-white/5 flex items-center justify-between text-xs text-zinc-300 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-[#1DB954] animate-pulse shrink-0" />
+            <span className="font-bold text-white">Shared DJ Session:</span>
+            <span className="text-zinc-400 truncate">
+              Both you and <strong className="text-zinc-200">{partnerName || 'Partner'}</strong> have collaborative real-time playback control.
+            </span>
+          </div>
+          {syncMusicState.updatedBy && (
+            <span className="text-[10px] text-zinc-300 bg-white/10 px-2 py-0.5 rounded-full border border-white/10 font-semibold shrink-0 ml-2">
+              Action: <strong>{syncMusicState.updatedBy === currentUserName ? 'You' : syncMusicState.updatedBy}</strong>
+            </span>
+          )}
+        </div>
+
         {/* Hero Active Player Card */}
-        <div className="p-4 sm:p-6 bg-gradient-to-b from-purple-50/70 to-white border-b border-purple-100 shrink-0">
+        <div className="p-4 sm:p-6 bg-gradient-to-b from-[#222222] via-[#181818] to-[#121212] border-b border-white/10 shrink-0 relative">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-5">
-            {/* Spinning Vinyl Cover Art */}
+            {/* Spinning Vinyl / Album Art with Spotify Shadow */}
             <div className="relative shrink-0">
               <div
-                className={`w-28 h-28 sm:w-32 sm:h-32 rounded-full p-1.5 bg-gradient-to-br ${currentlyPlayingTrack.coverGradient} shadow-xl flex items-center justify-center relative overflow-hidden ${
-                  syncMusicState.isPlaying ? 'animate-spin' : ''
+                className={`w-28 h-28 sm:w-32 sm:h-32 rounded-2xl p-1 bg-gradient-to-br ${currentlyPlayingTrack.coverGradient} shadow-2xl shadow-black/90 flex items-center justify-center relative overflow-hidden ring-1 ring-white/10 ${
+                  syncMusicState.isPlaying ? 'animate-pulse' : ''
                 }`}
-                style={{ animationDuration: '8s' }}
               >
                 {currentlyPlayingTrack.artworkUrl ? (
                   <img
                     src={currentlyPlayingTrack.artworkUrl}
                     alt={currentlyPlayingTrack.title}
-                    className="w-full h-full rounded-full object-cover border-2 border-white/60 shadow-inner"
+                    className="w-full h-full rounded-xl object-cover"
                   />
                 ) : (
-                  <>
-                    <div className="absolute inset-1 rounded-full border border-white/20" />
-                    <div className="absolute inset-3 rounded-full border border-white/25" />
-                    <div className="absolute inset-6 rounded-full border border-white/30" />
-                    <div className="w-10 h-10 rounded-full bg-slate-900 border-2 border-white/70 flex items-center justify-center text-xl shadow-inner z-10">
-                      <span>{currentlyPlayingTrack.coverEmoji}</span>
-                    </div>
-                  </>
+                  <div className="w-full h-full rounded-xl bg-zinc-900 flex flex-col items-center justify-center text-2xl">
+                    <span>{currentlyPlayingTrack.coverEmoji}</span>
+                    <Disc className="w-6 h-6 text-zinc-600 mt-1" />
+                  </div>
                 )}
               </div>
 
               {/* Live Synced Badge */}
               {syncMusicState.isPlaying && (
-                <span className="absolute -top-1 -right-1 px-2.5 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-extrabold shadow-md animate-pulse">
-                  SYNCED 🎵
+                <span className="absolute -top-1.5 -right-1.5 px-2.5 py-0.5 rounded-full bg-[#1DB954] text-black text-[10px] font-black shadow-lg uppercase tracking-wider">
+                  PLAYING 🎵
                 </span>
               )}
             </div>
 
             {/* Track Info & Visualizer */}
             <div className="flex-1 min-w-0 text-center sm:text-left w-full">
-              <div className="flex items-center justify-center sm:justify-between gap-2 mb-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 bg-purple-100/80 px-2.5 py-0.5 rounded-full">
+              <div className="flex items-center justify-center sm:justify-between gap-2 mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#1ed760] bg-[#1DB954]/15 border border-[#1DB954]/30 px-2.5 py-0.5 rounded-full">
                   {currentlyPlayingTrack.genre}
                 </span>
-                <span className="text-xs text-slate-400 font-medium flex items-center gap-1">
-                  <Globe className="w-3 h-3 text-emerald-500" />
-                  <span>Real Web Audio Stream</span>
+                <span className="text-xs text-zinc-400 font-medium flex items-center gap-1">
+                  <Globe className="w-3 h-3 text-[#1DB954]" />
+                  <span>Web Audio Stream</span>
                 </span>
               </div>
 
-              <h3 className="text-base sm:text-xl font-black text-slate-900 truncate">
+              <h3 className="text-base sm:text-xl font-black text-white truncate tracking-tight">
                 {currentlyPlayingTrack.title}
               </h3>
-              <p className="text-xs sm:text-sm text-slate-500 font-medium truncate mb-2">
+              <p className="text-xs sm:text-sm text-zinc-400 font-medium truncate mb-2">
                 {currentlyPlayingTrack.artist}
               </p>
 
-              {/* Waveform Canvas */}
-              <div className="h-8 w-full bg-purple-100/40 rounded-xl px-2 py-1 flex items-center justify-center overflow-hidden mb-2.5 border border-purple-200/40">
+              {/* Spotify Green Waveform Canvas */}
+              <div className="h-8 w-full bg-black/60 rounded-xl px-2 py-1 flex items-center justify-center overflow-hidden mb-2.5 border border-white/5">
                 <canvas ref={canvasRef} width={280} height={32} className="w-full h-full" />
               </div>
 
@@ -562,9 +669,9 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                   step={0.1}
                   value={currentTime}
                   onChange={handleSeek}
-                  className="w-full accent-purple-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg"
+                  className="w-full accent-[#1DB954] cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
                 />
-                <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold px-0.5">
+                <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono font-medium px-0.5">
                   <span>{formatTime(currentTime)}</span>
                   <span>{formatTime(currentlyPlayingTrack.duration)}</span>
                 </div>
@@ -573,32 +680,37 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
           </div>
 
           {/* Master Controls Row */}
-          <div className="mt-3.5 pt-3 border-t border-purple-100/60 flex items-center justify-between gap-4">
-            {/* Volume Control */}
-            <div className="flex items-center gap-2 w-28 sm:w-32">
+          <div className="mt-3.5 pt-3 border-t border-white/10 flex items-center justify-between gap-4">
+            {/* Volume Control (Individual to your device) */}
+            <div className="flex items-center gap-2 w-32 sm:w-40">
               <button
                 onClick={handleToggleMute}
-                className="text-slate-500 hover:text-purple-600 transition-colors cursor-pointer"
+                className="text-zinc-400 hover:text-white transition-colors cursor-pointer shrink-0"
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
-                {isMuted ? <VolumeX className="w-4 h-4 text-rose-500" /> : <Volume2 className="w-4 h-4" />}
+                {isMuted ? <VolumeX className="w-4 h-4 text-rose-500" /> : <Volume2 className="w-4 h-4 text-[#1DB954]" />}
               </button>
               <input
+                id="slider-music-volume"
                 type="range"
                 min={0}
                 max={1}
-                step={0.05}
+                step={0.02}
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-full accent-purple-600 cursor-pointer h-1 bg-slate-200 rounded-lg"
+                className="w-full accent-[#1DB954] cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
+                title="Your device audio volume"
               />
+              <span className="text-[10px] text-zinc-400 font-mono w-7 text-right select-none shrink-0">
+                {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
+              </span>
             </div>
 
             {/* Transport Buttons */}
             <div className="flex items-center gap-3">
               <button
                 onClick={handlePrevTrack}
-                className="p-2 rounded-full hover:bg-purple-100 text-slate-700 transition-transform active:scale-90 cursor-pointer"
+                className="p-2 rounded-full hover:bg-white/10 text-zinc-300 hover:text-white transition-transform active:scale-90 cursor-pointer"
                 title="Previous Track"
               >
                 <SkipBack className="w-5 h-5" />
@@ -607,19 +719,19 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
               <button
                 id="btn-music-play-pause"
                 onClick={handleTogglePlay}
-                className="w-12 h-12 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white flex items-center justify-center shadow-lg shadow-purple-500/30 transition-transform active:scale-95 cursor-pointer"
+                className="w-12 h-12 rounded-full bg-[#1DB954] hover:bg-[#1ed760] text-black flex items-center justify-center shadow-lg shadow-[#1DB954]/35 transition-all hover:scale-105 active:scale-95 cursor-pointer"
                 title={syncMusicState.isPlaying ? 'Pause' : 'Play Synchronized'}
               >
                 {syncMusicState.isPlaying ? (
-                  <Pause className="w-6 h-6 fill-white" />
+                  <Pause className="w-6 h-6 fill-black" />
                 ) : (
-                  <Play className="w-6 h-6 fill-white ml-0.5" />
+                  <Play className="w-6 h-6 fill-black ml-0.5" />
                 )}
               </button>
 
               <button
                 onClick={handleNextTrack}
-                className="p-2 rounded-full hover:bg-purple-100 text-slate-700 transition-transform active:scale-90 cursor-pointer"
+                className="p-2 rounded-full hover:bg-white/10 text-zinc-300 hover:text-white transition-transform active:scale-90 cursor-pointer"
                 title="Next Track"
               >
                 <SkipForward className="w-5 h-5" />
@@ -628,55 +740,55 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
             {/* Synced Indicator */}
             <div className="text-right hidden sm:block">
-              <span className="text-[11px] font-semibold text-purple-700 flex items-center justify-end gap-1">
-                <Radio className="w-3.5 h-3.5 text-pink-500 animate-pulse" />
-                Synced
+              <span className="text-[11px] font-semibold text-[#1ed760] flex items-center justify-end gap-1">
+                <Radio className="w-3.5 h-3.5 text-[#1DB954] animate-pulse" />
+                Synced Live
               </span>
-              <span className="text-[10px] text-slate-400">Direct Web API</span>
+              <span className="text-[10px] text-zinc-500 font-mono">Spotify Web API</span>
             </div>
           </div>
         </div>
 
-        {/* Navigation Tabs (100% Web Search & Direct Streaming) */}
-        <div className="flex items-center justify-between px-5 pt-3 border-b border-slate-100 bg-slate-50/50 shrink-0">
+        {/* Navigation Tabs (Spotify Pill Style) */}
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-white/10 bg-[#121212] shrink-0">
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
             {/* Direct Web Music Search */}
             <button
               onClick={() => setActiveTab('search')}
-              className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+              className={`py-1.5 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'search'
-                  ? 'border-purple-600 text-purple-700'
-                  : 'border-transparent text-slate-400 hover:text-slate-600'
+                  ? 'bg-white text-black shadow-md'
+                  : 'bg-[#242424] text-zinc-300 hover:text-white hover:bg-[#2e2e2e]'
               }`}
             >
-              <Search className="w-4 h-4 text-pink-500" />
-              <span>Search Web Music 🔎</span>
+              <Search className="w-3.5 h-3.5" />
+              <span>Search Music</span>
             </button>
 
             {/* Top Trending Web Hits */}
             <button
               onClick={() => setActiveTab('trending')}
-              className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+              className={`py-1.5 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'trending'
-                  ? 'border-purple-600 text-purple-700'
-                  : 'border-transparent text-slate-400 hover:text-slate-600'
+                  ? 'bg-white text-black shadow-md'
+                  : 'bg-[#242424] text-zinc-300 hover:text-white hover:bg-[#2e2e2e]'
               }`}
             >
-              <Flame className="w-4 h-4 text-amber-500" />
-              <span>Top Web Hits 🔥</span>
+              <Flame className="w-3.5 h-3.5 text-amber-400" />
+              <span>Top Hits 🔥</span>
             </button>
 
             {/* Custom Web Stream / Audio */}
             <button
               onClick={() => setActiveTab('custom')}
-              className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+              className={`py-1.5 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeTab === 'custom'
-                  ? 'border-purple-600 text-purple-700'
-                  : 'border-transparent text-slate-400 hover:text-slate-600'
+                  ? 'bg-white text-black shadow-md'
+                  : 'bg-[#242424] text-zinc-300 hover:text-white hover:bg-[#2e2e2e]'
               }`}
             >
-              <Link className="w-3.5 h-3.5 text-purple-500" />
-              <span>Custom Stream / MP3 📻</span>
+              <Link className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Custom / MP3 📻</span>
             </button>
           </div>
 
@@ -689,7 +801,7 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                 onClose();
                 onOpenWatchTogether();
               }}
-              className="pb-2 text-xs font-bold text-rose-600 hover:text-rose-700 transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ml-auto whitespace-nowrap"
+              className="text-xs font-bold text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ml-auto whitespace-nowrap"
               title={spaceType === 'friends' ? 'Switch to Squad Watch Party & YouTube Search' : 'Switch to Watch Together & YouTube Search'}
             >
               <Tv className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
@@ -700,17 +812,34 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
         {/* TAB 1: DIRECT WEB MUSIC SEARCH */}
         {activeTab === 'search' && (
-          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-[#121212]">
+            {/* Alexa-style Voice Control Banner */}
+            <HavenVoiceControl
+              isListening={voiceAssistant.isListening}
+              isHandsFree={voiceAssistant.isHandsFree}
+              transcript={voiceAssistant.transcript}
+              interimTranscript={voiceAssistant.interimTranscript}
+              lastActionMessage={voiceAssistant.lastActionMessage}
+              errorNotice={voiceAssistant.errorNotice}
+              isSpeaking={voiceAssistant.isSpeaking}
+              isSupported={voiceAssistant.isSupported}
+              onToggleHandsFree={voiceAssistant.toggleHandsFree}
+              onTriggerPushToTalk={voiceAssistant.triggerPushToTalk}
+              onQuickCommand={(cmd) => voiceAssistant.parseAndExecuteCommand(cmd)}
+              context="music"
+              variant="banner"
+            />
+
             {/* Search Input Bar */}
             <form onSubmit={handleSearchSubmit} className="relative flex items-center gap-2">
               <div className="relative flex-1">
-                <Search className="w-5 h-5 text-purple-500 absolute left-3.5 top-3" />
+                <Search className="w-5 h-5 text-zinc-400 absolute left-3.5 top-3" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={onSearchInputChange}
-                  placeholder="Search any artist, song, album, or genre directly from the web..."
-                  className="w-full pl-11 pr-10 py-2.5 text-xs sm:text-sm bg-slate-50 border border-purple-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium shadow-xs"
+                  placeholder="Search any artist, song, album, or genre..."
+                  className="w-full pl-11 pr-10 py-2.5 text-xs sm:text-sm bg-[#242424] text-white placeholder:text-zinc-500 border border-white/10 rounded-full focus:outline-none focus:ring-2 focus:ring-[#1DB954] font-medium transition"
                 />
                 {searchQuery && (
                   <button
@@ -719,7 +848,7 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                       setSearchQuery('');
                       handleSearchMusic('top hits');
                     }}
-                    className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200"
+                    className="absolute right-3 top-2.5 p-1 text-zinc-400 hover:text-white rounded-full hover:bg-white/10"
                     title="Clear search"
                   >
                     <X className="w-4 h-4" />
@@ -728,12 +857,12 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
               </div>
               <button
                 type="submit"
-                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white text-xs font-bold hover:opacity-95 transition-transform active:scale-95 cursor-pointer shadow-sm shrink-0 flex items-center gap-1.5"
+                className="px-5 py-2.5 rounded-full bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-black transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-md shadow-[#1DB954]/20 shrink-0 flex items-center gap-1.5"
               >
                 {isSearching ? (
-                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
                 ) : (
-                  <Search className="w-3.5 h-3.5" />
+                  <Search className="w-3.5 h-3.5 stroke-[2.5]" />
                 )}
                 <span>Search</span>
               </button>
@@ -741,7 +870,7 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
             {/* Direct Web Query Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">Popular:</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 shrink-0">Popular:</span>
               {[
                 '🔥 Top Hits',
                 'Taylor Swift',
@@ -764,7 +893,7 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                     setSearchQuery(clean);
                     handleSearchMusic(clean);
                   }}
-                  className="px-2.5 py-1 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200/80 font-semibold whitespace-nowrap cursor-pointer transition-transform active:scale-95"
+                  className="px-3 py-1 rounded-full bg-[#242424] hover:bg-[#2e2e2e] text-zinc-300 hover:text-white border border-white/5 text-xs font-semibold whitespace-nowrap cursor-pointer transition-transform active:scale-95"
                 >
                   {tag}
                 </button>
@@ -774,9 +903,9 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
             {/* Search Results List */}
             {searchResults.length > 0 ? (
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400 font-semibold px-1">
-                  <span>Found {searchResults.length} web tracks</span>
-                  <span className="text-purple-600">Tap any song to play together in sync</span>
+                <div className="flex items-center justify-between text-xs text-zinc-400 font-semibold px-1">
+                  <span>Found {searchResults.length} tracks</span>
+                  <span className="text-[#1ed760]">Tap song to play in sync</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {searchResults.map((track) => {
@@ -789,8 +918,8 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                         onClick={() => handleSelectTrack(track)}
                         className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 cursor-pointer group ${
                           isThisActive
-                            ? 'border-purple-300 bg-purple-50/80 shadow-sm ring-1 ring-purple-400/40'
-                            : 'border-slate-100 hover:border-purple-200 bg-white hover:bg-slate-50'
+                            ? 'border-[#1DB954]/60 bg-[#282828] shadow-lg shadow-black/40 ring-1 ring-[#1DB954]/40'
+                            : 'border-white/5 hover:border-white/15 bg-[#181818] hover:bg-[#222222]'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
@@ -798,22 +927,22 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                             <img
                               src={track.artworkUrl}
                               alt={track.title}
-                              className="w-12 h-12 rounded-xl object-cover shadow-xs shrink-0 group-hover:scale-105 transition-transform"
+                              className="w-12 h-12 rounded-xl object-cover shadow-sm shrink-0 group-hover:scale-105 transition-transform"
                             />
                           ) : (
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 text-white flex items-center justify-center text-xl shrink-0">
+                            <div className="w-12 h-12 rounded-xl bg-zinc-800 text-[#1DB954] flex items-center justify-center text-xl shrink-0">
                               🎵
                             </div>
                           )}
 
                           <div className="min-w-0">
-                            <h4 className={`text-xs sm:text-sm font-bold truncate ${isThisActive ? 'text-purple-700' : 'text-slate-800'}`}>
+                            <h4 className={`text-xs sm:text-sm font-bold truncate ${isThisActive ? 'text-[#1ed760]' : 'text-white'}`}>
                               {track.title}
                             </h4>
-                            <p className="text-[11px] text-slate-400 truncate">
+                            <p className="text-[11px] text-zinc-400 truncate">
                               {track.artist}
                             </p>
-                            <span className="text-[10px] text-purple-600 font-semibold">
+                            <span className="text-[10px] text-[#1DB954] font-medium">
                               {track.genre}
                             </span>
                           </div>
@@ -821,13 +950,13 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
                         <button
                           type="button"
-                          className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform shrink-0 ${
+                          className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
                             isThisPlaying
-                              ? 'bg-purple-600 text-white animate-pulse'
-                              : 'bg-purple-50 text-purple-700 group-hover:bg-purple-600 group-hover:text-white'
+                              ? 'bg-[#1DB954] text-black animate-pulse'
+                              : 'bg-white/10 text-white group-hover:bg-[#1DB954] group-hover:text-black shadow-sm'
                           }`}
                         >
-                          {isThisPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                          {isThisPlaying ? <Pause className="w-4 h-4 fill-black" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
                         </button>
                       </div>
                     );
@@ -835,22 +964,22 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                 </div>
               </div>
             ) : !isSearching ? (
-              <div className="text-center py-12 text-slate-400 space-y-2">
-                <Music className="w-10 h-10 mx-auto text-slate-300 mb-1" />
-                <p className="text-sm font-bold text-slate-700">No tracks found for "{searchQuery}"</p>
-                <p className="text-xs text-slate-400">Search for another artist name or song title from the web.</p>
+              <div className="text-center py-12 text-zinc-400 space-y-2">
+                <Music className="w-10 h-10 mx-auto text-zinc-600 mb-1" />
+                <p className="text-sm font-bold text-white">No tracks found for "{searchQuery}"</p>
+                <p className="text-xs text-zinc-400">Search for another artist name or song title from the web.</p>
                 <button
                   type="button"
                   onClick={() => handleSearchMusic('top hits')}
-                  className="mt-2 px-3 py-1.5 rounded-xl bg-purple-600 text-white text-xs font-bold shadow-xs hover:bg-purple-700 cursor-pointer"
+                  className="mt-2 px-4 py-2 rounded-full bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-black shadow-md cursor-pointer transition-transform active:scale-95"
                 >
                   Load Top Global Hits
                 </button>
               </div>
             ) : (
-              <div className="text-center py-12 text-slate-400">
-                <div className="w-8 h-8 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-xs font-semibold text-purple-600">Searching web music catalog...</p>
+              <div className="text-center py-12 text-zinc-400">
+                <div className="w-8 h-8 border-3 border-[#1DB954] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                <p className="text-xs font-semibold text-[#1ed760]">Searching web music catalog...</p>
               </div>
             )}
           </div>
@@ -858,19 +987,19 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
         {/* TAB 2: TOP TRENDING WEB HITS */}
         {activeTab === 'trending' && (
-          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
-            <div className="flex items-center justify-between text-xs text-slate-400 font-semibold px-1">
-              <span className="flex items-center gap-1 text-slate-600">
-                <Flame className="w-4 h-4 text-amber-500" />
+          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-[#121212]">
+            <div className="flex items-center justify-between text-xs text-zinc-400 font-semibold px-1">
+              <span className="flex items-center gap-1.5 text-zinc-200">
+                <Flame className="w-4 h-4 text-amber-400" />
                 Today's Top Global Songs
               </span>
-              <span className="text-purple-600">Updated in real-time</span>
+              <span className="text-[#1ed760]">Updated in real-time</span>
             </div>
 
             {isLoadingTrending ? (
-              <div className="text-center py-12 text-slate-400">
-                <div className="w-8 h-8 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-xs font-semibold text-purple-600">Fetching global trending charts...</p>
+              <div className="text-center py-12 text-zinc-400">
+                <div className="w-8 h-8 border-3 border-[#1DB954] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                <p className="text-xs font-semibold text-[#1ed760]">Fetching global trending charts...</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -884,12 +1013,12 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                       onClick={() => handleSelectTrack(track)}
                       className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 cursor-pointer group ${
                         isThisActive
-                          ? 'border-purple-300 bg-purple-50/80 shadow-sm ring-1 ring-purple-400/40'
-                          : 'border-slate-100 hover:border-purple-200 bg-white hover:bg-slate-50'
+                          ? 'border-[#1DB954]/60 bg-[#282828] shadow-lg shadow-black/40 ring-1 ring-[#1DB954]/40'
+                          : 'border-white/5 hover:border-white/15 bg-[#181818] hover:bg-[#222222]'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <span className="w-5 text-center text-xs font-black text-slate-400 group-hover:text-purple-600">
+                        <span className="w-5 text-center text-xs font-black text-zinc-500 group-hover:text-[#1ed760]">
                           {idx + 1}
                         </span>
 
@@ -897,22 +1026,22 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                           <img
                             src={track.artworkUrl}
                             alt={track.title}
-                            className="w-12 h-12 rounded-xl object-cover shadow-xs shrink-0 group-hover:scale-105 transition-transform"
+                            className="w-12 h-12 rounded-xl object-cover shadow-sm shrink-0 group-hover:scale-105 transition-transform"
                           />
                         ) : (
-                          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-rose-500 text-white flex items-center justify-center text-xl shrink-0">
+                          <div className="w-12 h-12 rounded-xl bg-zinc-800 text-amber-400 flex items-center justify-center text-xl shrink-0">
                             🔥
                           </div>
                         )}
 
                         <div className="min-w-0">
-                          <h4 className={`text-xs sm:text-sm font-bold truncate ${isThisActive ? 'text-purple-700' : 'text-slate-800'}`}>
+                          <h4 className={`text-xs sm:text-sm font-bold truncate ${isThisActive ? 'text-[#1ed760]' : 'text-white'}`}>
                             {track.title}
                           </h4>
-                          <p className="text-[11px] text-slate-400 truncate">
+                          <p className="text-[11px] text-zinc-400 truncate">
                             {track.artist}
                           </p>
-                          <span className="text-[10px] text-purple-600 font-semibold">
+                          <span className="text-[10px] text-[#1DB954] font-medium">
                             {track.genre}
                           </span>
                         </div>
@@ -920,13 +1049,13 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
                       <button
                         type="button"
-                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform shrink-0 ${
+                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
                           isThisPlaying
-                            ? 'bg-purple-600 text-white animate-pulse'
-                            : 'bg-purple-50 text-purple-700 group-hover:bg-purple-600 group-hover:text-white'
+                            ? 'bg-[#1DB954] text-black animate-pulse'
+                            : 'bg-white/10 text-white group-hover:bg-[#1DB954] group-hover:text-black shadow-sm'
                         }`}
                       >
-                        {isThisPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                        {isThisPlaying ? <Pause className="w-4 h-4 fill-black" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
                       </button>
                     </div>
                   );
@@ -938,16 +1067,16 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
 
         {/* TAB 3: CUSTOM AUDIO STREAM & UPLOAD MP3 */}
         {activeTab === 'custom' && (
-          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-[#121212]">
             {/* Upload MP3 File */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200/80">
+            <div className="p-4 rounded-2xl bg-[#181818] border border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <Upload className="w-4 h-4 text-purple-600" />
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Upload className="w-4 h-4 text-[#1DB954]" />
                     Upload Local MP3 Audio
                   </h4>
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-[11px] text-zinc-400">
                     Upload any full-length song to broadcast directly to your partner
                   </p>
                 </div>
@@ -961,18 +1090,18 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                 />
                 <label
                   htmlFor="music-upload-input"
-                  className={`px-3 py-1.5 rounded-xl bg-purple-600 text-white text-xs font-bold shadow-sm hover:bg-purple-700 transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-3.5 py-2 rounded-full bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-black shadow-md transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 ${
                     uploadingAudio ? 'opacity-50 pointer-events-none' : ''
                   }`}
                 >
                   {uploadingAudio ? (
                     <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
                       <span>Uploading...</span>
                     </>
                   ) : (
                     <>
-                      <Upload className="w-3.5 h-3.5" />
+                      <Upload className="w-3.5 h-3.5 stroke-[2.5]" />
                       <span>Choose MP3</span>
                     </>
                   )}
@@ -983,7 +1112,7 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
             {/* Direct Web Audio URL Form */}
             <form onSubmit={handlePlayCustomStream} className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-zinc-300 mb-1">
                   Audio Stream or Direct MP3 URL
                 </label>
                 <input
@@ -991,12 +1120,12 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                   placeholder="https://example.com/audio.mp3 or web radio stream"
                   value={customUrlInput}
                   onChange={(e) => setCustomUrlInput(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3.5 py-2.5 text-xs bg-[#242424] text-white placeholder:text-zinc-500 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1DB954]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-zinc-300 mb-1">
                   Song or Radio Station Name (Optional)
                 </label>
                 <input
@@ -1004,25 +1133,25 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                   placeholder="e.g. Cozy Midnight Lofi Radio"
                   value={customTitleInput}
                   onChange={(e) => setCustomTitleInput(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3.5 py-2.5 text-xs bg-[#242424] text-white placeholder:text-zinc-500 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1DB954]"
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:opacity-95 text-white text-xs font-bold shadow-md shadow-purple-500/20 transition-transform active:scale-98 cursor-pointer"
+                className="w-full py-2.5 rounded-xl bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-black shadow-lg shadow-[#1DB954]/25 transition-transform active:scale-98 cursor-pointer"
               >
                 Broadcast & Play Together 🎵
               </button>
             </form>
 
             {/* Web Radio Presets */}
-            <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200/60 text-xs text-purple-900 space-y-2">
-              <h4 className="font-bold flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-purple-600" />
+            <div className="p-4 rounded-2xl bg-[#181818] border border-white/10 text-xs space-y-2">
+              <h4 className="font-bold text-white flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-[#1DB954]" />
                 Live Web Radio Presets
               </h4>
-              <p className="text-[11px] text-purple-700">
+              <p className="text-[11px] text-zinc-400">
                 Tap any radio station below to instantly stream in real-time together:
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
@@ -1039,10 +1168,10 @@ export const MusicLoungeModal: React.FC<MusicLoungeModalProps> = ({
                       setCustomUrlInput(preset.url);
                       setCustomTitleInput(preset.title);
                     }}
-                    className="p-2 rounded-xl bg-white hover:bg-purple-100/50 border border-purple-200/80 text-left text-xs font-semibold text-purple-800 transition-colors cursor-pointer flex items-center justify-between"
+                    className="p-2.5 rounded-xl bg-[#242424] hover:bg-[#2e2e2e] border border-white/5 text-left text-xs font-semibold text-zinc-200 transition-colors cursor-pointer flex items-center justify-between group"
                   >
-                    <span>{preset.title}</span>
-                    <span className="text-[10px] text-purple-500 font-bold">Load</span>
+                    <span className="group-hover:text-white">{preset.title}</span>
+                    <span className="text-[10px] text-[#1DB954] font-bold">Load</span>
                   </button>
                 ))}
               </div>

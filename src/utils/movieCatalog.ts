@@ -1,4 +1,5 @@
 import { MediaItem } from '../types';
+import { searchVidukiMovies, parseVidukiUrl, getVidukiConfig, FEATURED_VIDUKI_CATALOG } from './vidukiService';
 
 export const FEATURED_MOVIES: MediaItem[] = [
   // --- Romance & Date Night Cinema ---
@@ -577,24 +578,6 @@ export const FEATURED_MOVIES: MediaItem[] = [
 
   // --- Extended Animation & 4K Shorts ---
   {
-    id: 'anim-spring-yt',
-    title: 'Spring: Ancient Mountain Spirit',
-    artist: 'Andy Goralczyk (Blender Studio 2019)',
-    year: 2019,
-    genre: 'Poetic Fantasy Animation',
-    category: 'animation',
-    type: 'youtube',
-    url: 'https://www.youtube.com/watch?v=WhWc3b3KhnY',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
-    duration: 464,
-    rating: '9.8/10',
-    description: 'A young shepherd girl and her dog journey into frozen ancient peaks to awaken the spirits of spring in breathtaking 4K CGI.',
-    tags: ['Blender Studio', 'Spring', 'Fantasy', '4K CGI', 'Wholesome'],
-    source: 'youtube',
-    badge: '4K Open Cinema 🌸',
-    streamQuality: '4K Ultra HD',
-  },
-  {
     id: 'anim-charge-yt',
     title: 'Charge: Cyberpunk Robot Heist',
     artist: 'Hjalti Hjalmarsson (Blender Studio 2022)',
@@ -878,71 +861,70 @@ export async function searchYouTubeDirect(query: string): Promise<MediaItem[]> {
   return [];
 }
 
-// Live search real online movies across Internet Archive & curated library
+// Live search online movies (Viduki.net and YouTube ONLY)
 export async function searchOnlineMovies(query: string, category: string = 'all'): Promise<MediaItem[]> {
   const trimmed = query.trim();
   if (!trimmed) {
-    return fetchOnlineMovies(category);
+    if (category === 'youtube') {
+      return searchYouTubeDirect('trending relax music 4k');
+    }
+    return FEATURED_VIDUKI_CATALOG;
   }
 
-  // If user specifically requests YouTube search, query YouTube endpoint directly
-  if (category === 'youtube') {
+  // 1. If category is viduki or query is an IMDb / TMDB ID
+  const isImdb = /^tt\d+$/i.test(trimmed);
+  const isNumeric = /^\d+$/i.test(trimmed);
+  if (category === 'viduki' || isImdb || isNumeric) {
+    try {
+      const vidukiResults = await searchVidukiMovies(trimmed);
+      if (vidukiResults.length > 0) return vidukiResults;
+    } catch (err) {
+      console.warn('Viduki search failed:', err);
+    }
+  }
+
+  // 2. Check direct YouTube search
+  try {
     const ytResults = await searchYouTubeDirect(trimmed);
     if (ytResults.length > 0) return ytResults;
-  }
-
-  try {
-    const res = await fetch(`/api/movies/search?q=${encodeURIComponent(trimmed)}&category=${encodeURIComponent(category)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.movies) && data.movies.length > 0) {
-        return data.movies;
-      }
-    }
   } catch (err) {
-    console.warn('Could not search /api/movies/search:', err);
+    console.warn('Direct YouTube search failed:', err);
   }
 
-  // Fallback local matching
-  const q = trimmed.toLowerCase();
-  return FEATURED_MOVIES.filter((m) => {
-    return (
-      m.title.toLowerCase().includes(q) ||
-      m.genre?.toLowerCase().includes(q) ||
-      m.artist?.toLowerCase().includes(q) ||
-      m.description?.toLowerCase().includes(q) ||
-      m.tags?.some((t) => t.toLowerCase().includes(q)) ||
-      m.category?.toLowerCase().includes(q)
-    );
-  });
+  // 3. Viduki fallback search
+  try {
+    const vidukiResults = await searchVidukiMovies(trimmed);
+    if (vidukiResults.length > 0) return vidukiResults;
+  } catch (err) {
+    console.warn('Viduki fallback search failed:', err);
+  }
+
+  return [];
 }
 
-// Surprise date night movie randomizer
+// Surprise movie randomizer (Viduki or YouTube ONLY)
 export async function getSurpriseMovie(category: string = 'all'): Promise<MediaItem> {
-  try {
-    const res = await fetch(`/api/movies/surprise?category=${encodeURIComponent(category)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.movie && data.movie.id) {
-        return data.movie;
+  if (category === 'youtube') {
+    try {
+      const yt = await searchYouTubeDirect('trending viral 4k');
+      if (yt.length > 0) {
+        return yt[Math.floor(Math.random() * yt.length)];
       }
-    }
-  } catch (err) {
-    console.warn('Could not fetch surprise movie from server:', err);
+    } catch {}
   }
-
-  let pool = FEATURED_MOVIES;
-  if (category !== 'all') {
-    const filtered = FEATURED_MOVIES.filter((m) => m.category === category);
-    if (filtered.length > 0) pool = filtered;
-  }
-  return pool[Math.floor(Math.random() * pool.length)];
+  return FEATURED_VIDUKI_CATALOG[Math.floor(Math.random() * FEATURED_VIDUKI_CATALOG.length)];
 }
 
 // Helper to parse and fetch metadata from arbitrary URLs or query
 export async function searchOrFetchMovie(queryOrUrl: string): Promise<MediaItem[]> {
   const trimmed = queryOrUrl.trim();
   if (!trimmed) return FEATURED_MOVIES;
+
+  // Direct Viduki URL check
+  const vidukiItem = parseVidukiUrl(trimmed);
+  if (vidukiItem) {
+    return [vidukiItem];
+  }
 
   const isUrl = trimmed.startsWith('http://') || trimmed.startsWith('https://') || /^[a-zA-Z0-9_-]{11}$/.test(trimmed);
 
@@ -974,7 +956,7 @@ export async function searchOrFetchMovie(queryOrUrl: string): Promise<MediaItem[
     ];
   }
 
-  // Live search online movies (includes direct YouTube results)
+  // Live search online movies (includes direct YouTube and Viduki results)
   return searchOnlineMovies(trimmed);
 }
 

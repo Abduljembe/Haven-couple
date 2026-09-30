@@ -135,7 +135,16 @@ class MusicEngine {
   private isPlaying = false;
   private playbackStartTime = 0;
   private pausedAtTime = 0;
-  private volume = 0.7;
+  private volume = (() => {
+    try {
+      const saved = localStorage.getItem('haven_music_volume');
+      if (saved !== null) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+      }
+    } catch {}
+    return 0.75;
+  })();
 
   private noteStep = 0;
 
@@ -173,19 +182,16 @@ class MusicEngine {
     this.noteStep = Math.floor(seekSeconds * 2);
 
     if (track.url) {
-      // Stream custom audio URL
+      // Stream custom audio URL (using standard HTMLAudioElement for reliable mobile playback)
       try {
         if (!this.customAudio) {
           this.customAudio = new Audio();
-          this.customAudio.crossOrigin = 'anonymous';
           this.customAudio.loop = true;
-          if (this.ctx && this.masterGain) {
-            this.customSource = this.ctx.createMediaElementSource(this.customAudio);
-            this.customSource.connect(this.masterGain);
-          }
         }
         this.customAudio.src = track.url;
         this.customAudio.currentTime = seekSeconds;
+        this.customAudio.volume = Math.max(0, Math.min(1, this.volume));
+        this.customAudio.muted = this.volume === 0;
         this.customAudio.play().catch(() => {});
       } catch {
         // fallback
@@ -223,11 +229,23 @@ class MusicEngine {
 
   public setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol));
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
+    try {
+      localStorage.setItem('haven_music_volume', this.volume.toString());
+    } catch {}
+
+    if (this.masterGain) {
+      this.masterGain.gain.value = this.volume;
+      if (this.ctx && this.ctx.state === 'running') {
+        try {
+          this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
+        } catch {
+          // Ignore automation curve errors
+        }
+      }
     }
     if (this.customAudio) {
       this.customAudio.volume = this.volume;
+      this.customAudio.muted = this.volume === 0;
     }
   }
 

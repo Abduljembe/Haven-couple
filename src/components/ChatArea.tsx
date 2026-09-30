@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Send,
@@ -24,12 +24,13 @@ import {
   Download,
   Flame,
   Maximize2,
+  Minimize2,
   UploadCloud,
   Zap,
-  Volume2,
   Palette,
   PartyPopper,
   Music,
+  Headphones,
   Radio,
   Wallpaper,
   Pencil,
@@ -38,17 +39,31 @@ import {
   ChevronDown,
   Ban,
   CheckCircle2,
+  Reply,
   User,
   Users,
   Plus,
+  CircleDot,
   Tv,
+  Mail,
+  AlertCircle,
+  UserCheck,
+  PhoneCall,
+  PhoneMissed,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneOff,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
-import { DecryptedMessage, UserProfile, ActiveSquadCallState } from '../types';
+import { DecryptedMessage, UserProfile, ActiveSquadCallState, SpaceEmailInvite, CallLogDetails } from '../types';
 import { CameraCaptureModal } from './CameraCaptureModal';
+import { VoiceWaveformPlayer } from './VoiceWaveformPlayer';
 import { ColorMode, ThemeConfig } from '../utils/theme';
-import { playSoundboardById, SOUNDBOARD_PRESETS, playHeartbeatSound, playMessageChime } from '../utils/sounds';
+import { playHeartbeatSound, playMessageChime } from '../utils/sounds';
 import { WallpaperSettings, DEFAULT_WALLPAPER_SETTINGS } from '../utils/wallpaper';
 import { InteractiveWallpaper } from './InteractiveWallpaper';
+import { triggerHaptic } from '../utils/haptics';
 
 interface ChatAreaProps {
   messages: DecryptedMessage[];
@@ -58,7 +73,12 @@ interface ChatAreaProps {
   partnerName: string;
   partnerAvatar: string;
   isPartnerTyping: boolean;
-  onSendMessage: (text: string, type?: 'text' | 'image' | 'video' | 'audio', fileData?: { buffer: ArrayBuffer; mimeType: string; fileName?: string; duration?: number; fileSize?: number }) => void;
+  onSendMessage: (
+    text: string,
+    type?: 'text' | 'image' | 'video' | 'audio',
+    fileData?: { buffer: ArrayBuffer; mimeType: string; fileName?: string; duration?: number; fileSize?: number },
+    replyTo?: { id: string; senderName: string; text: string; type: string }
+  ) => void;
   onSendReaction: (messageId: string, emoji: string) => void;
   onTyping: (isTyping: boolean) => void;
   autoDeleteTimer: number;
@@ -82,6 +102,19 @@ interface ChatAreaProps {
   onDeleteMessage?: (messageId: string, deleteForEveryone: boolean) => void;
   onEditMessage?: (messageId: string, newText: string) => void;
   onOpenWatchTogether?: () => void;
+  pendingSpouseInvite?: SpaceEmailInvite | null;
+  onAcceptSpouseInvite?: (invite: SpaceEmailInvite) => void;
+  onDismissSpouseInvite?: (inviteId: string) => void;
+  onOpenInviteSpouse?: () => void;
+  onOpenQRPairing?: () => void;
+  onOpenThumbKiss?: () => void;
+  ambientHeartbeat?: boolean;
+  isChatFullscreen?: boolean;
+  onToggleChatFullscreen?: () => void;
+  onStartAudioCall?: () => void;
+  onStartVideoCall?: () => void;
+  onOpenStatus?: () => void;
+  hasUnreadStatus?: boolean;
 }
 
 // Categorized Emojis for Couples & Romantic Chat
@@ -164,13 +197,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onEditMessage,
   onOpenWatchTogether,
   colorMode = 'light',
+  pendingSpouseInvite = null,
+  onAcceptSpouseInvite,
+  onDismissSpouseInvite,
+  onOpenInviteSpouse,
+  onOpenQRPairing,
+  onOpenThumbKiss,
+  ambientHeartbeat = false,
+  isChatFullscreen = false,
+  onToggleChatFullscreen,
+  onStartAudioCall,
+  onStartVideoCall,
+  onOpenStatus,
+  hasUnreadStatus = false,
 }) => {
   const isDark = colorMode === 'dark';
   const [inputText, setInputText] = useState('');
+  const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [activeEmojiCategory, setActiveEmojiCategory] = useState(0);
   const [showTimerMenu, setShowTimerMenu] = useState(false);
-  const [showSoundMenu, setShowSoundMenu] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
@@ -179,12 +225,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [selectedVideoName, setSelectedVideoName] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
 
-  // WhatsApp-style Highlighting, Edit & Delete State
+  // Haven-style Highlighting, Edit & Delete State
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [deleteModalMsg, setDeleteModalMsg] = useState<DecryptedMessage | null>(null);
   const [activeDropdownMsgId, setActiveDropdownMsgId] = useState<string | null>(null);
   const [copiedToast, setCopiedToast] = useState(false);
+  const [toastNotice, setToastNotice] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastNotice(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastNotice(null);
+    }, 4000);
+  }, []);
+
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   
   // Voice Recording state
@@ -245,7 +302,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 1500);
   };
 
-  // WhatsApp Actions: Start Editing
+  // Haven Actions: Start Editing
   const startEditingMessage = (msg: DecryptedMessage) => {
     if (msg.type !== 'text' || msg.senderId !== currentUserId || msg.isDeleted) return;
     setEditingMessageId(msg.id);
@@ -257,19 +314,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 60);
   };
 
-  // WhatsApp Actions: Cancel Editing
+  // Haven Actions: Cancel Editing
   const cancelEditing = () => {
     setEditingMessageId(null);
     setInputText('');
   };
 
-  // WhatsApp Actions: Open Delete Confirmation Modal
+  // Haven Actions: Open Delete Confirmation Modal
   const openDeleteModal = (msg: DecryptedMessage) => {
     setDeleteModalMsg(msg);
     setActiveDropdownMsgId(null);
   };
 
-  // WhatsApp Actions: Confirm Delete
+  // Haven Actions: Confirm Delete
   const confirmDelete = (messageId: string, deleteForEveryone: boolean) => {
     onDeleteMessage?.(messageId, deleteForEveryone);
     setDeleteModalMsg(null);
@@ -282,7 +339,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  // WhatsApp Actions: Copy Message Content
+  // Haven Actions: Copy Message Content
   const handleCopyMessage = (text: string) => {
     if (!text) return;
     navigator.clipboard?.writeText(text);
@@ -295,7 +352,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (e) e.preventDefault();
     if (!inputText.trim()) return;
 
-    // If in WhatsApp editing mode, save edit
+    // If in Haven editing mode, save edit
     if (editingMessageId) {
       onEditMessage?.(editingMessageId, inputText.trim());
       setEditingMessageId(null);
@@ -304,9 +361,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       return;
     }
 
-    onSendMessage(inputText.trim(), 'text');
+    const replyPayload = replyingTo
+      ? {
+          id: replyingTo.id,
+          senderName: replyingTo.senderName,
+          text: replyingTo.type === 'text' ? replyingTo.content : `[${replyingTo.type}]`,
+          type: replyingTo.type,
+        }
+      : undefined;
+
+    onSendMessage(inputText.trim(), 'text', undefined, replyPayload);
+    setReplyingTo(null);
     setInputText('');
     onTyping(false);
+    triggerHaptic('light');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -333,12 +401,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name);
 
     if (!isVideo && !isImage) {
-      alert('Please select a valid photo or video file to send.');
+      showToast('Please select a valid photo or video file to send.');
       return;
     }
 
     if (file.size > 80 * 1024 * 1024) {
-      alert('File size exceeds 80MB. Please choose a shorter or compressed video for instant end-to-end encryption.');
+      showToast('File size exceeds 80MB. Please choose a shorter or compressed video.');
       return;
     }
 
@@ -403,6 +471,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // Voice Note Recording
   const startRecording = async () => {
     try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone access is not supported in this browser context.');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -415,11 +486,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const mimeType = mediaRecorder.mimeType || (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4');
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const arrayBuffer = await audioBlob.arrayBuffer();
         onSendMessage('', 'audio', {
           buffer: arrayBuffer,
-          mimeType: 'audio/webm',
+          mimeType,
           duration: recordDuration,
         });
 
@@ -438,7 +510,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }, 1000);
     } catch (err) {
       console.error('Error starting audio recording:', err);
-      alert('Microphone access is required to record voice notes.');
+      showToast('Microphone access is required to record voice notes.');
     }
   };
 
@@ -498,11 +570,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   return (
     <div 
-      className="relative flex-1 flex flex-col h-[calc(100vh-65px)] max-w-5xl mx-auto w-full overflow-hidden"
+      className={`relative flex-1 flex flex-col w-full h-full min-h-0 overflow-hidden transition-all duration-700 ${
+        ambientHeartbeat ? 'ring-2 ring-rose-500/30 shadow-[inset_0_0_50px_rgba(244,63,94,0.12)]' : ''
+      }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Ambient Heartbeat Pulse Glow Aura */}
+      {ambientHeartbeat && (
+        <div className="absolute inset-0 pointer-events-none z-20 animate-pulse border-2 border-rose-400/25 rounded-2xl shadow-[inset_0_0_40px_rgba(244,63,94,0.18)]" />
+      )}
       <InteractiveWallpaper settings={wallpaperSettings || DEFAULT_WALLPAPER_SETTINGS}>
         {/* Ambient Living Theme Atmosphere Orbs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-0 opacity-30">
@@ -510,6 +588,86 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div className={`absolute top-1/2 -right-20 w-96 h-96 rounded-full blur-3xl ${themeConfig?.ambientOrbs[1] || 'bg-pink-300/20'} animate-ambient-2`} />
           <div className={`absolute -bottom-20 left-1/4 w-80 h-80 rounded-full blur-3xl ${themeConfig?.ambientOrbs[2] || 'bg-amber-300/15'} animate-ambient-3`} />
         </div>
+
+      {/* Floating Minimal Fullscreen Header Bar */}
+      {isChatFullscreen && (
+        <div className="z-30 shrink-0 px-3 sm:px-6 py-2.5 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 text-white flex items-center justify-between shadow-xl animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative shrink-0">
+              <img
+                src={partnerAvatar}
+                alt={partnerName}
+                className="w-8 h-8 rounded-full object-cover border border-rose-400/50"
+              />
+              {ambientHeartbeat && (
+                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900 animate-pulse" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-xs sm:text-sm font-bold text-white truncate flex items-center gap-1.5">
+                <span>{spaceType === 'friends' ? (roomMembers?.length ? `${roomMembers.length} Members` : 'Squad') : partnerName}</span>
+                <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                  <Lock className="w-2.5 h-2.5" /> 256-bit Encrypted
+                </span>
+              </h3>
+              <p className="text-[10px] text-slate-400 truncate">
+                {isPartnerTyping ? (
+                  <span className="text-rose-400 font-semibold animate-pulse">Typing a message...</span>
+                ) : ambientHeartbeat ? (
+                  <span className="text-emerald-400">Online & Connected</span>
+                ) : (
+                  <span>Full Screen Chat Area</span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {onTriggerLoveBuzz && (
+              <button
+                type="button"
+                id="btn-fs-love-buzz"
+                onClick={onTriggerLoveBuzz}
+                className="p-1.5 sm:px-2.5 sm:py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                title="Send Love Ping"
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden md:inline">Love Buzz</span>
+              </button>
+            )}
+
+            {onToggleChatFullscreen && (
+              <button
+                type="button"
+                id="btn-exit-chat-fullscreen"
+                onClick={onToggleChatFullscreen}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-rose-300 hover:text-white text-xs font-bold border border-slate-700 shadow-md transition-all cursor-pointer"
+                title="Exit Full Screen Chat (Esc or F)"
+              >
+                <Minimize2 className="w-3.5 h-3.5 text-rose-400" />
+                <span>Exit Fullscreen</span>
+                <span className="hidden sm:inline text-[10px] text-slate-400 font-mono font-normal">(Esc)</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Full Screen Mode Toggle Button on Desktop */}
+      {!isChatFullscreen && onToggleChatFullscreen && (
+        <div className="absolute top-2.5 right-3.5 z-20 hidden md:block">
+          <button
+            type="button"
+            id="btn-quick-chat-fullscreen"
+            onClick={onToggleChatFullscreen}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200/80 dark:border-slate-800 text-[11px] font-semibold shadow-xs hover:shadow-md transition-all cursor-pointer"
+            title="Extend Chat Area to Full Screen (F)"
+          >
+            <Maximize2 className="w-3 h-3 text-rose-500" />
+            <span>Full Screen</span>
+          </button>
+        </div>
+      )}
 
       {/* Drag and Drop Overlay */}
       {isDraggingFile && (
@@ -538,7 +696,79 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* WhatsApp Message Selection Action Bar */}
+      {/* Sticky Top Incoming Invite Banner (Real-time partner invitation in chat area) */}
+      {pendingSpouseInvite && (
+        <div
+          id="sticky-inchat-spouse-invite"
+          className={`z-25 mx-2 sm:mx-3 my-2 p-3 sm:p-4 rounded-2xl shadow-xl border-2 animate-in slide-in-from-top-2 duration-300 ${
+            pendingSpouseInvite.spaceType === 'friends'
+              ? 'bg-gradient-to-r from-indigo-950/95 via-purple-900/95 to-slate-900 border-indigo-400/80 text-white shadow-indigo-500/20'
+              : 'bg-gradient-to-r from-rose-950/95 via-pink-900/95 to-slate-900 border-rose-400/80 text-white shadow-rose-500/20'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                {pendingSpouseInvite.spaceType === 'friends' ? <Users className="w-3 h-3" /> : <Heart className="w-3 h-3 fill-rose-400 text-rose-400" />}
+                Incoming Connection Invitation
+              </span>
+            </div>
+            {onDismissSpouseInvite && (
+              <button
+                type="button"
+                onClick={() => onDismissSpouseInvite(pendingSpouseInvite.id)}
+                className="text-white/60 hover:text-white p-1 rounded-full hover:bg-white/10 transition cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-white/15 border border-white/30 flex items-center justify-center text-lg shrink-0 font-bold">
+                {pendingSpouseInvite.spaceType === 'friends' ? '🎉' : '💕'}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-semibold text-white">
+                  <strong>{pendingSpouseInvite.senderName}</strong> invited you to connect:
+                </p>
+                <p className="text-xs text-emerald-200 truncate">
+                  "{pendingSpouseInvite.spaceName}" {pendingSpouseInvite.message ? `• ${pendingSpouseInvite.message}` : ''}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                id="btn-sticky-accept-invite"
+                onClick={() => onAcceptSpouseInvite && onAcceptSpouseInvite(pendingSpouseInvite)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Accept & Connect</span>
+              </button>
+              {onDismissSpouseInvite && (
+                <button
+                  type="button"
+                  onClick={() => onDismissSpouseInvite(pendingSpouseInvite.id)}
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                >
+                  Decline
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Haven Message Selection Action Bar */}
       {highlightedMessage && (
         <div className="z-30 flex items-center justify-between px-3 sm:px-5 py-2.5 bg-slate-900 text-white shadow-lg border-b border-slate-800 animate-in slide-in-from-top-2 duration-150">
           <div className="flex items-center gap-3">
@@ -582,7 +812,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 id="btn-edit-selected-message"
                 onClick={() => startEditingMessage(highlightedMessage)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
-                title="Edit message (WhatsApp style)"
+                title="Edit message (Haven style)"
               >
                 <Pencil className="w-3.5 h-3.5" />
                 <span>Edit</span>
@@ -609,7 +839,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               id="btn-delete-selected-message"
               onClick={() => openDeleteModal(highlightedMessage)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
-              title="Delete message (WhatsApp style)"
+              title="Delete message (Haven style)"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete</span>
@@ -621,8 +851,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Messages Stream */}
       <div 
         id="chat-messages-container"
-        className="flex-1 overflow-y-auto px-4 py-6 space-y-4"
+        className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-3 sm:py-6 space-y-4"
       >
+        <div className="max-w-4xl lg:max-w-5xl mx-auto w-full flex flex-col space-y-4 min-h-full">
         {/* Active Squad Call Banner */}
         {activeSquadCall && (
           <div className="sticky top-0 z-30 mx-auto max-w-lg mb-4 p-3 bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950/95 backdrop-blur-md rounded-2xl border border-indigo-500/50 shadow-xl text-white flex items-center justify-between gap-3 animate-in fade-in zoom-in-95">
@@ -638,7 +869,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <p className="text-xs sm:text-sm font-bold truncate flex items-center gap-1.5">
                   <span>Active Squad {activeSquadCall.callType === 'video' ? 'Video' : 'Audio'} Call</span>
                   <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold border border-emerald-400/30">
-                    {activeSquadCall.participants.length}/5 talking
+                    {activeSquadCall.participants.length} in call
                   </span>
                 </p>
                 <p className="text-[11px] text-slate-300 truncate">
@@ -667,7 +898,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <Lock className="w-3.5 h-3.5" />
               </div>
               <span className="text-xs font-bold text-slate-800">
-                {spaceType === 'friends' ? 'Encrypted Friends & Squad Space (Max 5 Members)' : 'End-to-End Encrypted Couple Space'}
+                {spaceType === 'friends' ? 'Encrypted Friends & Squad Space' : 'End-to-End Encrypted Couple Space'}
               </span>
             </div>
             <p className="text-[11px] text-slate-500 leading-normal text-center">
@@ -688,11 +919,148 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 className="mt-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300/60 transition-colors cursor-pointer"
               >
                 <Wallpaper className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Change WhatsApp Chat Wallpaper</span>
+                <span>Change Haven Chat Wallpaper</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Special Incoming Spouse or Friends Sanctuary/Squad Invitation Banner */}
+        {pendingSpouseInvite && (
+          <div
+            id="card-inchat-spouse-invite"
+            className={`my-4 mx-auto max-w-lg p-5 rounded-3xl text-white animate-in zoom-in-95 duration-300 border-2 shadow-2xl ${
+              pendingSpouseInvite.spaceType === 'friends'
+                ? 'bg-gradient-to-br from-indigo-950/95 via-purple-950/90 to-slate-900 border-indigo-500 shadow-indigo-500/30'
+                : 'bg-gradient-to-br from-rose-950/95 via-pink-950/90 to-slate-900 border-rose-500 shadow-rose-500/30'
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-2 text-xs font-bold uppercase tracking-wider">
+              {pendingSpouseInvite.spaceType === 'friends' ? (
+                <>
+                  <Users className="w-4 h-4 text-indigo-400 animate-bounce" />
+                  <span className="text-indigo-300">Squad Hangout Invitation</span>
+                </>
+              ) : (
+                <>
+                  <Heart className="w-4 h-4 fill-rose-500 text-rose-500 animate-bounce" />
+                  <span className="text-rose-300">Special Sanctuary Invitation For You</span>
+                </>
+              )}
+            </div>
+            <h3 className="font-serif text-lg font-bold text-white mb-1.5">
+              {pendingSpouseInvite.spaceType === 'friends'
+                ? `${pendingSpouseInvite.senderName} invited you to join their Squad hangout!`
+                : `${pendingSpouseInvite.senderName} has invited you to enter your private couple sanctuary!`}
+            </h3>
+            <p className={`text-xs mb-3 ${pendingSpouseInvite.spaceType === 'friends' ? 'text-indigo-200/90' : 'text-rose-200/90'}`}>
+              Space: <strong className="text-white">"{pendingSpouseInvite.spaceName}"</strong>
+            </p>
+            {pendingSpouseInvite.message && (
+              <div className="p-3 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 text-xs text-slate-100 italic mb-4">
+                "{pendingSpouseInvite.message}"
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="btn-inchat-accept-invite"
+                onClick={() => onAcceptSpouseInvite && onAcceptSpouseInvite(pendingSpouseInvite)}
+                className={`flex-1 py-3 px-4 rounded-xl text-white font-bold text-xs shadow-lg active:scale-95 transition cursor-pointer flex items-center justify-center gap-2 ${
+                  pendingSpouseInvite.spaceType === 'friends'
+                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-95 shadow-indigo-500/30'
+                    : 'bg-gradient-to-r from-rose-500 to-pink-600 hover:opacity-95 shadow-rose-500/30'
+                }`}
+              >
+                {pendingSpouseInvite.spaceType === 'friends' ? (
+                  <>
+                    <Users className="w-4 h-4" />
+                    <span>Accept & Join Squad 🎉</span>
+                  </>
+                ) : (
+                  <>
+                    <Heart className="w-4 h-4 fill-white" />
+                    <span>Accept & Step In Together 💕</span>
+                  </>
+                )}
+              </button>
+              {onDismissSpouseInvite && (
+                <button
+                  type="button"
+                  id="btn-inchat-dismiss-invite"
+                  onClick={() => onDismissSpouseInvite(pendingSpouseInvite.id)}
+                  className="py-3 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  Later
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* In-Chat Friends Invitation Card when squad has 1 or fewer other members */}
+        {spaceType === 'friends' && roomMembers.length <= 1 && onOpenInviteSpouse && (
+          <div
+            id="card-inchat-invite-friends"
+            className="my-3 mx-auto max-w-lg p-4 rounded-3xl bg-slate-900/90 border border-indigo-500/40 shadow-xl text-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-500/30">
+                <Users className="w-5 h-5 text-indigo-400" />
+              </div>
+              <div className="text-left">
+                <h4 className="font-bold text-xs text-white flex items-center gap-1.5">
+                  <span>Invite Friends to Squad</span>
+                </h4>
+                <p className="text-[11px] text-slate-300">
+                  Invite as many friends as you want with no limits!
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              id="btn-inchat-open-friends-invite"
+              onClick={onOpenInviteSpouse}
+              className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-95 text-white font-bold text-xs shadow-md shadow-indigo-500/20 active:scale-95 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Invite Friends &rarr;</span>
+            </button>
+          </div>
+        )}
+
+        {/* In-Chat Spouse Invitation Card when Partner hasn't joined yet */}
+        {spaceType === 'couple' && !partner && onOpenInviteSpouse && (
+          <div
+            id="card-inchat-invite-spouse"
+            className="my-3 mx-auto max-w-lg p-4 rounded-3xl bg-slate-900/90 border border-rose-500/40 shadow-xl text-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
+                <Heart className="w-5 h-5 fill-rose-500 text-rose-500" />
+              </div>
+              <div className="text-left">
+                <h4 className="font-bold text-xs text-white flex items-center gap-1.5">
+                  <span>Invite Your Spouse to Step In</span>
+                </h4>
+                <p className="text-[11px] text-slate-300">
+                  She/he will receive a special invitation card right in her chat!
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              id="btn-inchat-open-invite"
+              onClick={onOpenInviteSpouse}
+              className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:opacity-95 text-white font-bold text-xs shadow-md shadow-rose-500/20 active:scale-95 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Invite Spouse &rarr;</span>
+            </button>
+          </div>
+        )}
 
         {/* Message List */}
         {messages.map((msg) => {
@@ -726,12 +1094,188 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           }
 
           if (msg.type === 'call_log') {
+            let logData: CallLogDetails | null = msg.callLog || null;
+            if (!logData && msg.content) {
+              try {
+                const parsed = JSON.parse(msg.content);
+                if (parsed && typeof parsed === 'object') {
+                  logData = {
+                    callType: parsed.callType || (msg.content.includes('video') ? 'video' : 'audio'),
+                    status: parsed.status || (msg.content.toLowerCase().includes('missed') ? 'missed' : 'completed'),
+                    duration: parsed.duration || 0,
+                    callerId: parsed.callerId || msg.senderId,
+                    callerName: parsed.callerName || msg.senderName,
+                    isSquadCall: parsed.isSquadCall || false,
+                    groupName: parsed.groupName,
+                  };
+                }
+              } catch {
+                // Not JSON, analyze plaintext
+                const lower = msg.content.toLowerCase();
+                const isVideo = lower.includes('video');
+                const isMissed = lower.includes('missed') || lower.includes('no answer') || lower.includes('unanswered');
+                const isDeclined = lower.includes('declined');
+                logData = {
+                  callType: isVideo ? 'video' : 'audio',
+                  status: isMissed ? 'missed' : isDeclined ? 'declined' : 'completed',
+                  duration: 0,
+                  callerId: msg.senderId,
+                  callerName: msg.senderName,
+                };
+              }
+            }
+
+            const callType = logData?.callType || 'audio';
+            const status = logData?.status || 'completed';
+            const isCaller = (logData?.callerId ? logData.callerId === currentUserId : msg.senderId === currentUserId);
+            const isSquad = logData?.isSquadCall || false;
+            const durationSec = logData?.duration || 0;
+
+            const formatCallDuration = (secs: number) => {
+              if (secs <= 0) return '';
+              if (secs < 60) return `${secs}s`;
+              const m = Math.floor(secs / 60);
+              const s = secs % 60;
+              if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+              const h = Math.floor(m / 60);
+              const remM = m % 60;
+              return `${h}h ${remM}m`;
+            };
+
+            // Derive display texts and visual classes strictly following Haven
+            let titleText = '';
+            let subtitleText = '';
+            let isMissed = false;
+            let titleColor = '';
+            let iconBg = '';
+            let IconComponent: React.ReactNode = null;
+            let ArrowIcon: React.ReactNode = null;
+
+            if (status === 'missed') {
+              isMissed = true;
+              if (!isCaller) {
+                // I missed their call (Haven Red Call Item)
+                titleText = `Missed ${callType === 'video' ? 'video' : 'voice'} call`;
+                subtitleText = 'Tap to call back';
+                titleColor = 'text-[#ea0038] dark:text-[#ff3b5c] font-bold';
+                iconBg = 'bg-rose-500/15 border border-rose-500/30 text-[#ea0038] dark:text-[#ff3b5c]';
+                IconComponent = callType === 'video' ? <Video className="w-5 h-5 text-[#ea0038] dark:text-[#ff3b5c]" /> : <PhoneMissed className="w-5 h-5 text-[#ea0038] dark:text-[#ff3b5c]" />;
+                ArrowIcon = <ArrowDownLeft className="w-3.5 h-3.5 text-[#ea0038] dark:text-[#ff3b5c] stroke-[2.5]" />;
+              } else {
+                // I called, but partner didn't answer
+                titleText = `Outgoing ${callType === 'video' ? 'video' : 'voice'} call`;
+                subtitleText = 'No answer';
+                titleColor = isDark ? 'text-slate-300' : 'text-slate-700';
+                iconBg = isDark ? 'bg-slate-800 border border-slate-700 text-slate-400' : 'bg-slate-100 border border-slate-200 text-slate-500';
+                IconComponent = callType === 'video' ? <Video className="w-5 h-5 text-slate-400" /> : <PhoneOutgoing className="w-5 h-5 text-slate-400" />;
+                ArrowIcon = <ArrowUpRight className="w-3.5 h-3.5 text-slate-400 stroke-[2.5]" />;
+              }
+            } else if (status === 'declined') {
+              if (!isCaller) {
+                titleText = `Declined ${callType === 'video' ? 'video' : 'voice'} call`;
+                subtitleText = 'Declined by you';
+                titleColor = 'text-amber-500 font-semibold';
+                iconBg = 'bg-amber-500/15 border border-amber-500/30 text-amber-500';
+                IconComponent = <PhoneOff className="w-5 h-5 text-amber-500" />;
+                ArrowIcon = <ArrowDownLeft className="w-3.5 h-3.5 text-amber-500 stroke-[2.5]" />;
+              } else {
+                titleText = 'Call declined';
+                subtitleText = 'Partner declined';
+                titleColor = 'text-amber-500 font-semibold';
+                iconBg = 'bg-amber-500/15 border border-amber-500/30 text-amber-500';
+                IconComponent = <PhoneOff className="w-5 h-5 text-amber-500" />;
+                ArrowIcon = <ArrowUpRight className="w-3.5 h-3.5 text-amber-500 stroke-[2.5]" />;
+              }
+            } else {
+              // Completed / Connected Call
+              const durStr = formatCallDuration(durationSec);
+              if (isSquad) {
+                titleText = `Squad ${callType === 'video' ? 'video' : 'audio'} call`;
+                subtitleText = durStr ? `${durStr}` : 'Completed';
+                titleColor = 'text-indigo-400 font-semibold';
+                iconBg = 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-400';
+                IconComponent = <Users className="w-5 h-5 text-indigo-400" />;
+                ArrowIcon = <PhoneCall className="w-3.5 h-3.5 text-indigo-400" />;
+              } else if (!isCaller) {
+                // Incoming answered call
+                titleText = `Incoming ${callType === 'video' ? 'video' : 'voice'} call`;
+                subtitleText = durStr || 'Connected';
+                titleColor = isDark ? 'text-[#e9edef]' : 'text-slate-800';
+                iconBg = 'bg-[#00a884]/15 border border-[#00a884]/30 text-[#00a884] dark:text-[#25d366]';
+                IconComponent = callType === 'video' ? <Video className="w-5 h-5 text-[#00a884] dark:text-[#25d366]" /> : <PhoneIncoming className="w-5 h-5 text-[#00a884] dark:text-[#25d366]" />;
+                ArrowIcon = <ArrowDownLeft className="w-3.5 h-3.5 text-[#00a884] dark:text-[#25d366] stroke-[2.5]" />;
+              } else {
+                // Outgoing answered call
+                titleText = `Outgoing ${callType === 'video' ? 'video' : 'voice'} call`;
+                subtitleText = durStr || 'Connected';
+                titleColor = isDark ? 'text-[#e9edef]' : 'text-slate-800';
+                iconBg = 'bg-[#00a884]/15 border border-[#00a884]/30 text-[#00a884] dark:text-[#25d366]';
+                IconComponent = callType === 'video' ? <Video className="w-5 h-5 text-[#00a884] dark:text-[#25d366]" /> : <PhoneOutgoing className="w-5 h-5 text-[#00a884] dark:text-[#25d366]" />;
+                ArrowIcon = <ArrowUpRight className="w-3.5 h-3.5 text-[#00a884] dark:text-[#25d366] stroke-[2.5]" />;
+              }
+            }
+
             return (
-              <div key={msg.id} className="flex justify-center my-2">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs border border-slate-200">
-                  <Phone className="w-3.5 h-3.5 text-slate-400" />
-                  <span>{msg.content}</span>
-                  <span className="text-[10px] text-slate-400 font-mono ml-1">{formatMsgTime(msg.timestamp)}</span>
+              <div key={msg.id} className="flex justify-center my-2.5 sm:my-3 w-full px-2 animate-in fade-in zoom-in-95">
+                <div
+                  className={`relative max-w-sm sm:max-w-md w-full flex items-center justify-between gap-3 p-3 sm:p-3.5 rounded-2xl border shadow-sm transition-all select-none hover:shadow-md ${
+                    isDark
+                      ? 'bg-[#1f2c34]/95 border-[#2a3942] text-[#e9edef]'
+                      : 'bg-white/95 border-slate-200/90 text-slate-800'
+                  }`}
+                >
+                  {/* Left Call Icon Circle */}
+                  <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center shrink-0 ${iconBg}`}>
+                    {IconComponent}
+                  </div>
+
+                  {/* Center Details */}
+                  <div className="flex-1 min-w-0 pr-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`text-xs sm:text-sm truncate ${titleColor}`}>
+                        {titleText}
+                      </span>
+                      {isSquad && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 font-medium">
+                          Squad
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[11px] text-[#8696a0] dark:text-slate-400 mt-0.5 font-sans">
+                      <span className="flex items-center gap-1 font-medium">
+                        {ArrowIcon}
+                        <span>{subtitleText}</span>
+                      </span>
+                      <span>•</span>
+                      <span className="font-mono text-[10px]">{formatMsgTime(msg.timestamp)}</span>
+                    </div>
+                  </div>
+
+                  {/* Right Action Button: Call back or Call again (Haven Style) */}
+                  <div className="shrink-0 flex items-center">
+                    <button
+                      type="button"
+                      id={`btn-call-back-${msg.id}`}
+                      onClick={() => {
+                        triggerHaptic('medium');
+                        if (callType === 'video') {
+                          if (onStartVideoCall) onStartVideoCall();
+                        } else {
+                          if (onStartAudioCall) onStartAudioCall();
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 cursor-pointer shadow-xs ${
+                        isMissed && !isCaller
+                          ? 'bg-[#ea0038] hover:bg-[#d00030] text-white shadow-rose-900/30'
+                          : 'bg-[#00a884] hover:bg-[#008f6f] text-white shadow-[#00a884]/20'
+                      }`}
+                      title={isMissed && !isCaller ? 'Call back now' : 'Call again'}
+                    >
+                      {callType === 'video' ? <Video className="w-3.5 h-3.5" /> : <Phone className="w-3.5 h-3.5" />}
+                      <span className="hidden sm:inline font-sans">{isMissed && !isCaller ? 'Call back' : 'Call'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -776,7 +1320,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
                 )}
 
-                {/* WhatsApp Dropdown Chevron Button */}
+                {/* Quick Reply Button on Hover */}
+                {!msg.isDeleted && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setReplyingTo(msg);
+                      textInputRef.current?.focus();
+                      triggerHaptic('light');
+                    }}
+                    className={`absolute top-1.5 ${isMe ? 'left-7' : 'right-7'} p-1 rounded-full bg-black/25 hover:bg-black/45 text-white/90 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10`}
+                    title="Reply to message"
+                  >
+                    <Reply className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {/* Haven Dropdown Chevron Button */}
                 <button
                   type="button"
                   onClick={(e) => {
@@ -792,7 +1353,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
 
-                {/* WhatsApp Dropdown Popover Menu */}
+                {/* Haven Dropdown Popover Menu */}
                 {isDropdownOpen && (
                   <>
                     <div
@@ -806,6 +1367,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       className={`absolute top-7 ${isMe ? 'right-0' : 'left-0'} z-40 w-44 py-1.5 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 animate-in fade-in zoom-in-95 text-xs select-none`}
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {/* Reply Option */}
+                      {!msg.isDeleted && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(msg);
+                            setActiveDropdownMsgId(null);
+                            textInputRef.current?.focus();
+                            triggerHaptic('light');
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors cursor-pointer text-left font-medium"
+                        >
+                          <Reply className="w-3.5 h-3.5 text-rose-500" />
+                          <span>Reply</span>
+                        </button>
+                      )}
+
                       {/* Edit Option (if sent by me, text, and not deleted) */}
                       {isMe && msg.type === 'text' && !msg.isDeleted && (
                         <button
@@ -865,6 +1443,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     setHighlightedMessageId(isHighlighted ? null : msg.id);
                     setActiveDropdownMsgId(null);
                   }}
+                  onDoubleClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button') || target.closest('video') || target.closest('input') || target.closest('a')) return;
+                    e.stopPropagation();
+                    onSendReaction(msg.id, '❤️');
+                    onSendLoveBurst('❤️');
+                    playMessageChime();
+                    triggerHaptic('heartbeat');
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setHighlightedMessageId(msg.id);
@@ -886,7 +1473,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           : 'bg-white border border-slate-200/80 text-slate-900 rounded-bl-xs')
                   }`}
                 >
-                  {/* WhatsApp Deleted Message Placeholder */}
+                  {/* Haven Deleted Message Placeholder */}
                   {msg.isDeleted ? (
                     <div className={`flex items-center gap-2 italic py-1 text-xs select-none ${
                       isMe ? 'text-rose-100' : (isDark ? 'text-slate-400' : 'text-slate-500')
@@ -901,6 +1488,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <div className="text-xs text-amber-200 flex items-center gap-1">
                           <Lock className="w-3.5 h-3.5" />
                           <span>Encrypted with another key</span>
+                        </div>
+                      )}
+
+                      {/* Quoted Replied-To Message */}
+                      {msg.replyTo && (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const el = document.getElementById(`msg-${msg.replyTo?.id}`);
+                            if (el) {
+                              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              setHighlightedMessageId(msg.replyTo.id);
+                            }
+                          }}
+                          className={`mb-2 p-2 rounded-xl border-l-4 border-rose-400 text-left text-xs cursor-pointer transition-all hover:scale-[1.01] ${
+                            isMe ? 'bg-black/20 text-white/95 hover:bg-black/30' : 'bg-rose-50/80 dark:bg-slate-900/80 text-slate-700 dark:text-slate-200 border-rose-500'
+                          }`}
+                        >
+                          <div className="font-semibold text-[11px] text-rose-300 dark:text-rose-400 flex items-center gap-1">
+                            <Reply className="w-3 h-3 rotate-180" />
+                            <span>{msg.replyTo.senderName}</span>
+                          </div>
+                          <div className="text-[11px] truncate opacity-90 mt-0.5">{msg.replyTo.text}</div>
                         </div>
                       )}
 
@@ -965,38 +1575,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         </div>
                       )}
 
-                      {/* Voice Note Audio Message */}
+                      {/* Voice Note Audio Message with Waveform Scrubbing & Speed */}
                       {msg.type === 'audio' && !msg.decryptionError && (
-                        <div className="flex items-center gap-3 py-1 min-w-[200px]">
-                          <button
-                            onClick={() => togglePlayAudio(msg.id, msg.content)}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-transform active:scale-95 cursor-pointer ${
-                              isMe
-                                ? 'bg-white text-rose-600 shadow-sm'
-                                : 'bg-rose-500 text-white shadow-sm'
-                            }`}
-                          >
-                            {playingAudioId === msg.id ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
-                          </button>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-1.5 h-6">
-                              {/* Animated Colorful Equalizer Bars */}
-                              {[14, 26, 18, 30, 22, 16, 28, 20, 12, 24].map((height, i) => (
-                                <div
-                                  key={i}
-                                  style={{ height: playingAudioId === msg.id ? undefined : `${height}px` }}
-                                  className={`w-1 rounded-full transition-all ${
-                                    playingAudioId === msg.id
-                                      ? `animate-eq-${(i % 5) + 1} ${isMe ? 'bg-white' : 'bg-gradient-to-t from-rose-500 to-amber-400'}`
-                                      : isMe ? 'bg-white/60' : 'bg-rose-300'
-                                  }`}
-                                />
-                              ))}
-                            </div>
-                            <div className={`text-[10px] mt-1 font-mono ${isMe ? 'text-white/90' : 'text-slate-500'}`}>
-                              Voice Note {msg.fileMetadata?.duration ? `(${msg.fileMetadata.duration}s)` : ''}
-                            </div>
-                          </div>
+                        <div className="py-1">
+                          <VoiceWaveformPlayer
+                            audioSrc={msg.content}
+                            duration={msg.fileMetadata?.duration}
+                            isSender={isMe}
+                            messageId={msg.id}
+                            isPlayingGlobal={playingAudioId === msg.id}
+                            onTogglePlayGlobal={(id) => setPlayingAudioId(id || null)}
+                          />
                         </div>
                       )}
                     </>
@@ -1071,7 +1660,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       type="button"
                       onClick={() => startEditingMessage(msg)}
                       className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer"
-                      title="Edit message (WhatsApp style)"
+                      title="Edit message (Haven style)"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
@@ -1081,7 +1670,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     type="button"
                     onClick={() => openDeleteModal(msg)}
                     className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
-                    title="Delete message (WhatsApp style)"
+                    title="Delete message (Haven style)"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -1101,23 +1690,76 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
+        {/* In-Chat Real-Time Partner Sanctuary / Friends Invitation Card at conversation bottom */}
+        {pendingSpouseInvite && (
+          <div
+            id="inchat-conversation-invite-card"
+            className={`my-3 p-4 sm:p-5 rounded-2xl shadow-xl border-2 animate-in slide-in-from-bottom-3 duration-300 ${
+              pendingSpouseInvite.spaceType === 'friends'
+                ? 'bg-gradient-to-r from-indigo-950/95 via-purple-900/95 to-slate-900 border-indigo-400 text-white shadow-indigo-500/20'
+                : 'bg-gradient-to-r from-rose-950/95 via-pink-900/95 to-slate-900 border-rose-400 text-white shadow-rose-500/20'
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              </span>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                {pendingSpouseInvite.spaceType === 'friends' ? <Users className="w-3.5 h-3.5" /> : <Heart className="w-3.5 h-3.5 fill-rose-400 text-rose-400" />}
+                Live Connection Invitation For You
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-white">
+                  <strong>{pendingSpouseInvite.senderName}</strong> invited you to connect:
+                </p>
+                <p className="text-xs text-pink-200 mt-0.5">
+                  "{pendingSpouseInvite.spaceName}" {pendingSpouseInvite.message ? `• ${pendingSpouseInvite.message}` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-conversation-accept-invite"
+                  onClick={() => onAcceptSpouseInvite && onAcceptSpouseInvite(pendingSpouseInvite)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Accept & Connect Now</span>
+                </button>
+                {onDismissSpouseInvite && (
+                  <button
+                    type="button"
+                    onClick={() => onDismissSpouseInvite(pendingSpouseInvite.id)}
+                    className="px-3 py-2.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       {/* Rich Multi-Category Couple Emoji Picker Popup */}
       {showEmojiPicker && (
-        <div className="bg-white/95 backdrop-blur-md border-t border-rose-100 shadow-xl p-3 z-30 animate-in fade-in slide-in-from-bottom-2">
+        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-rose-100 dark:border-slate-800 shadow-xl p-3 z-30 animate-in fade-in slide-in-from-bottom-2">
           {/* Category Tabs & Close */}
-          <div className="flex items-center justify-between border-b border-rose-100/80 pb-2 mb-2">
+          <div className="flex items-center justify-between border-b border-rose-100/80 dark:border-slate-800 pb-2 mb-2">
             <div className="flex items-center gap-1 overflow-x-auto">
               {EMOJI_CATEGORIES.map((cat, idx) => (
                 <button
                   key={cat.name}
                   onClick={() => setActiveEmojiCategory(idx)}
-                  className={`px-2.5 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                     activeEmojiCategory === idx
                       ? 'bg-rose-500 text-white shadow-xs'
-                      : 'text-slate-600 hover:bg-rose-50 hover:text-rose-600'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-slate-800 hover:text-rose-600 dark:hover:text-rose-400'
                   }`}
                 >
                   <span>{cat.icon}</span>
@@ -1128,7 +1770,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
             <button
               onClick={() => setShowEmojiPicker(false)}
-              className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
+              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 ml-1"
               title="Close emoji picker"
             >
               <X className="w-4 h-4" />
@@ -1136,14 +1778,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
 
           {/* Emoji Grid */}
-          <div className="grid grid-cols-8 sm:grid-cols-10 md:grid-cols-12 gap-1.5 max-h-48 overflow-y-auto p-1">
+          <div className="grid grid-cols-7 xs:grid-cols-8 sm:grid-cols-10 md:grid-cols-12 gap-1.5 max-h-48 overflow-y-auto p-1">
             {EMOJI_CATEGORIES[activeEmojiCategory].emojis.map((emoji) => (
               <button
                 key={emoji}
                 onClick={() => {
                   setInputText((prev) => prev + emoji);
                 }}
-                className="text-2xl p-2 hover:bg-rose-50 rounded-xl transition-transform hover:scale-130 active:scale-95 cursor-pointer flex items-center justify-center"
+                className="text-2xl p-2 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-xl transition-transform hover:scale-130 active:scale-95 cursor-pointer flex items-center justify-center"
                 title={`Add ${emoji}`}
               >
                 {emoji}
@@ -1163,6 +1805,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   onClick={() => {
                     onSendMessage(emoji, 'text');
                     onSendLoveBurst(emoji);
+                    playMessageChime();
+                    triggerHaptic('light');
                   }}
                   className="text-base hover:scale-135 transition-transform p-1 hover:bg-rose-50 rounded-lg cursor-pointer"
                   title={`Direct send ${emoji} to partner`}
@@ -1177,7 +1821,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Interactive Spark & Celebration Dock */}
       <div className="px-2.5 sm:px-4 py-1.5 flex items-center justify-between gap-1.5 sm:gap-2 text-xs border-t border-slate-100/80 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xs overflow-x-auto no-scrollbar whitespace-nowrap">
-        {/* Left: Quick Sparks, Reactions, Confetti, Love Buzz & Sound Bites */}
+        {/* Left: Quick Sparks, Reactions, Confetti & Love Buzz */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-100/80 dark:bg-slate-800/80 rounded-xl px-1.5 sm:px-2 py-0.5 border border-slate-200/60 dark:border-slate-700/60">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider hidden sm:inline">Spark:</span>
@@ -1187,6 +1831,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 onClick={() => {
                   onSendLoveBurst(emoji);
                   playMessageChime();
+                  triggerHaptic('light');
                 }}
                 className="p-0.5 sm:p-1 hover:scale-135 active:scale-95 transition-transform text-xs sm:text-sm cursor-pointer"
                 title={`Send floating spark ${emoji}`}
@@ -1207,6 +1852,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               });
               onSendLoveBurst('🎉');
               playHeartbeatSound();
+              triggerHaptic('success');
             }}
             className="px-2 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200/80 text-[11px] font-semibold flex items-center gap-1 transition-transform active:scale-95 cursor-pointer"
             title="Launch Celebration Confetti! 🎉"
@@ -1218,7 +1864,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {/* Quick Love Buzz / Screen Rumble */}
           {onTriggerLoveBuzz && (
             <button
-              onClick={onTriggerLoveBuzz}
+              onClick={() => {
+                onTriggerLoveBuzz();
+                triggerHaptic('buzz');
+              }}
               className="px-2 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 text-[11px] font-semibold flex items-center gap-1 transition-transform active:scale-95 cursor-pointer"
               title="Trigger Love Buzz & Screen Shake! ⚡"
             >
@@ -1226,42 +1875,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span className="hidden sm:inline">Love Buzz</span>
             </button>
           )}
-
-          {/* Quick Sound Bites Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowSoundMenu(!showSoundMenu)}
-              className="px-2 py-1 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200/80 text-[11px] font-semibold flex items-center gap-1 transition-transform active:scale-95 cursor-pointer"
-              title="Trigger Squad Soundboard Soundbite"
-            >
-              <Volume2 className="w-3.5 h-3.5 text-purple-500" />
-              <span className="hidden md:inline">Sound Bite</span>
-            </button>
-
-            {showSoundMenu && (
-              <div className="absolute left-0 bottom-8 w-44 bg-white rounded-2xl shadow-xl border border-slate-100 py-1.5 z-40 animate-in fade-in zoom-in-95">
-                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                  Instant Sound Bites
-                </div>
-                {SOUNDBOARD_PRESETS.slice(0, 6).map((sound) => (
-                  <button
-                    key={sound.id}
-                    onClick={() => {
-                      playSoundboardById(sound.id);
-                      onSendLoveBurst(sound.emoji);
-                      setShowSoundMenu(false);
-                    }}
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center justify-between hover:bg-purple-50 text-slate-700 transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span>{sound.emoji}</span>
-                      <span>{sound.name}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Right: Theme button + Disappearing Messages */}
@@ -1330,12 +1943,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             )}
           </div>
         </div>
+        </div>
       </div>
 
       {/* Input Bar */}
-      <div className={`p-3 sm:p-4 border-t transition-colors duration-200 ${
+      <div className={`p-2 sm:p-4 border-t transition-colors duration-200 shrink-0 ${
         isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-rose-100'
       }`}>
+        <div className="max-w-4xl lg:max-w-5xl mx-auto w-full">
         {/* Hidden File Inputs */}
         <input
           ref={imageInputRef}
@@ -1379,7 +1994,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         ) : (
           <div>
-            {/* WhatsApp Editing Message Indicator Banner */}
+            {/* Haven Editing Message Indicator Banner */}
             {editingMessage && (
               <div className="mb-2 flex items-center justify-between px-3.5 py-1.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/80 rounded-xl text-xs text-emerald-800 dark:text-emerald-200 animate-in slide-in-from-bottom-2 duration-150">
                 <div className="flex items-center gap-2 min-w-0">
@@ -1397,6 +2012,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   onClick={cancelEditing}
                   className="p-1 hover:bg-emerald-200/60 dark:hover:bg-emerald-900/60 rounded-full transition-colors cursor-pointer text-emerald-700 dark:text-emerald-300 ml-2 shrink-0"
                   title="Cancel editing (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Replying-To Indicator Banner */}
+            {replyingTo && (
+              <div className="mb-2 flex items-center justify-between px-3.5 py-1.5 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/80 rounded-xl text-xs text-rose-800 dark:text-rose-200 animate-in slide-in-from-bottom-2 duration-150">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-1 rounded-full bg-rose-500/20 text-rose-600 dark:text-rose-400 shrink-0">
+                    <Reply className="w-3.5 h-3.5 rotate-180" />
+                  </div>
+                  <div className="min-w-0 flex items-center gap-1.5">
+                    <span className="font-bold shrink-0">Replying to {replyingTo.senderName}:</span>
+                    <span className="truncate italic opacity-85">
+                      "{replyingTo.type === 'text' ? replyingTo.content : `[${replyingTo.type}]`}"
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="btn-cancel-reply-banner"
+                  onClick={() => setReplyingTo(null)}
+                  className="p-1 hover:bg-rose-200/60 dark:hover:bg-rose-900/60 rounded-full transition-colors cursor-pointer text-rose-700 dark:text-rose-300 ml-2 shrink-0"
+                  title="Cancel reply (Esc)"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1424,9 +2065,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <Plus className="w-5 h-5 transition-transform duration-200" />
                 </button>
 
-                {/* WhatsApp-style Consolidated Attachment Tray Popup */}
+                {/* Haven-style Consolidated Attachment Tray Popup */}
                 {showAttachmentMenu && (
-                  <div className="absolute bottom-12 left-0 w-64 sm:w-72 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-2.5 z-40 animate-in fade-in zoom-in-95 slide-in-from-bottom-2">
+                  <div className="absolute bottom-12 left-0 w-[calc(100vw-1.5rem)] max-w-[288px] sm:w-72 max-h-[calc(100dvh-130px)] overflow-y-auto overscroll-contain bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-2.5 z-40 animate-in fade-in zoom-in-95 slide-in-from-bottom-2">
                     <div className="px-2.5 py-1 text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center justify-between">
                       <span>Add to Chat</span>
                       <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
@@ -1434,6 +2075,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 mt-1">
+                      {/* Haven Status Story */}
+                      {onOpenStatus && (
+                        <button
+                          type="button"
+                          id="btn-attach-status-menu"
+                          onClick={() => {
+                            onOpenStatus();
+                            setShowAttachmentMenu(false);
+                          }}
+                          className="flex flex-col items-center justify-center p-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-900/50 transition-all cursor-pointer group active:scale-95 relative"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-[#00a884] text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform relative">
+                            <CircleDot className="w-5 h-5" />
+                            {hasUnreadStatus && (
+                              <span className="absolute -top-1 -right-1 w-3 h-3 bg-white dark:bg-slate-900 rounded-full flex items-center justify-center">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs font-bold mt-1.5">
+                            {spaceType === 'friends' ? 'Squad Story' : 'Status Story'}
+                          </span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">24h update</span>
+                        </button>
+                      )}
+
                       {/* Camera Snap */}
                       <button
                         type="button"
@@ -1527,6 +2194,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           <span className="text-[10px] text-slate-500 dark:text-slate-400">YouTube & Cinema</span>
                         </button>
                       )}
+
+                      {/* Spotify Music Lounge (Both DJ & Search) */}
+                      {onOpenMusicLounge && (
+                        <button
+                          type="button"
+                          id="btn-attach-music-lounge-menu"
+                          onClick={() => {
+                            onOpenMusicLounge();
+                            setShowAttachmentMenu(false);
+                          }}
+                          className="flex flex-col items-center justify-center p-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-[#121212] dark:hover:bg-[#181818] text-emerald-900 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 transition-all cursor-pointer group active:scale-95"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center shadow-md group-hover:scale-110 transition-transform relative">
+                            <Headphones className="w-5 h-5 text-black stroke-[2.5]" />
+                            {isMusicPlaying && (
+                              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#1ed760] rounded-full border border-white dark:border-slate-900 animate-ping" />
+                            )}
+                          </div>
+                          <span className="text-xs font-bold mt-1.5">Spotify Lounge</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">Stream & Both DJ 🟢</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1558,7 +2247,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   placeholder={
                     editingMessageId
                       ? 'Edit your message...'
-                      : `Send a private encrypted note or video to ${partnerName}...`
+                      : `Message ${partnerName || ''}...`
                   }
                   className={`w-full py-2.5 px-4 rounded-2xl text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 resize-none max-h-32 transition-colors leading-relaxed ${
                     editingMessageId
@@ -1616,6 +2305,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </form>
           </div>
         )}
+        </div>
       </div>
 
       {/* Lightbox Modal for Encrypted Photo preview */}
@@ -1697,7 +2387,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
       />
 
-      {/* WhatsApp Delete Message Confirmation Modal */}
+      {/* Haven Delete Message Confirmation Modal */}
       {deleteModalMsg && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in"
@@ -1766,6 +2456,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {copiedToast && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 bg-slate-900/90 backdrop-blur-md text-white rounded-full text-xs font-medium shadow-xl border border-slate-700 animate-in fade-in slide-in-from-bottom-2">
           Message copied to clipboard!
+        </div>
+      )}
+
+      {/* System & media Toast Notice */}
+      {toastNotice && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-slate-900/95 backdrop-blur-md text-white rounded-full text-xs font-medium shadow-2xl border border-rose-500/30 text-center max-w-sm animate-in fade-in slide-in-from-bottom-2">
+          {toastNotice}
         </div>
       )}
       </InteractiveWallpaper>

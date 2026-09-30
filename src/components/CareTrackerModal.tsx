@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   HeartHandshake,
+  ArrowLeft,
   X,
   Droplets,
   Heart,
@@ -144,33 +145,44 @@ export const CareTrackerModal: React.FC<CareTrackerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
       <div
         id="care-tracker-modal"
-        className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-100 flex flex-col max-h-[90vh]"
+        className="w-full max-w-2xl bg-white rounded-none sm:rounded-3xl shadow-2xl overflow-hidden border-0 sm:border border-rose-100 flex flex-col h-[100dvh] sm:h-auto sm:max-h-[90vh]"
       >
         {/* Header */}
-        <div className="px-6 py-4 bg-gradient-to-r from-rose-50 via-pink-50 to-emerald-50 border-b border-rose-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-200 flex items-center justify-center text-rose-600">
-              <HeartHandshake className="w-5 h-5" />
+        <div className="px-3 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-rose-50 via-pink-50 to-emerald-50 border-b border-rose-100 flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-care-mobile-back"
+              className="p-1.5 -ml-1 text-rose-600 hover:bg-rose-100/60 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-rose-500/10 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+              <HeartHandshake className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <span>Care Tracker & Love Bank</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold flex items-center gap-1">
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
+                <span>Care Tracker</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold flex items-center gap-1 shrink-0">
                   <Flame className="w-3 h-3 text-orange-500 fill-orange-500" />
-                  <span>{streakDays} Day Streak</span>
+                  <span>{streakDays}d Streak</span>
                 </span>
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-[11px] sm:text-xs text-slate-500 truncate">
                 Daily health care nudges & romantic coupon bank for two
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/60 transition-colors cursor-pointer"
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/60 transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>

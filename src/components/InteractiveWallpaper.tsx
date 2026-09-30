@@ -274,7 +274,7 @@ export const InteractiveWallpaper: React.FC<InteractiveWallpaperProps> = ({
     <div
       ref={containerRef}
       id="haven-interactive-wallpaper-container"
-      className={`relative w-full h-full overflow-hidden ${className}`}
+      className={`relative w-full h-full flex flex-col overflow-hidden ${className}`}
       style={{
         backgroundColor: !isCustomImage ? computedBg : undefined,
         backgroundImage: isCustomImage ? computedBg : undefined,
@@ -282,7 +282,7 @@ export const InteractiveWallpaper: React.FC<InteractiveWallpaperProps> = ({
         backgroundPosition: isCustomImage ? 'center' : undefined,
       }}
     >
-      {/* Repeating SVG Doodle Pattern Layer (WhatsApp Style) */}
+      {/* Repeating SVG Doodle Pattern Layer (Haven Style) */}
       {patternDataUri && (
         <div
           id="wallpaper-doodle-pattern"
@@ -317,7 +317,7 @@ export const InteractiveWallpaper: React.FC<InteractiveWallpaperProps> = ({
       />
 
       {/* Foreground Content (Chat Stream, Composer, etc.) */}
-      <div className="relative z-10 w-full h-full flex flex-col">
+      <div className="relative z-10 w-full h-full flex flex-col min-h-0">
         {children}
       </div>
     </div>

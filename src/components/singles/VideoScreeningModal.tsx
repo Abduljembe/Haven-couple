@@ -78,6 +78,7 @@ export const VideoScreeningModal: React.FC<VideoScreeningModalProps> = ({
   const [copiedKey, setCopiedKey] = useState(false);
   const [audioLevel, setAudioLevel] = useState<number>(10);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [isLocalVideoReady, setIsLocalVideoReady] = useState(false);
   const [showMiniGames, setShowMiniGames] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
@@ -105,60 +106,87 @@ export const VideoScreeningModal: React.FC<VideoScreeningModalProps> = ({
     const setupMedia = async () => {
       try {
         setCameraError(null);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: true,
-        });
+        setIsLocalVideoReady(false);
+
+        let stream: MediaStream | null = null;
+        // Strategy 1: video + audio
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: true,
+          });
+        } catch (firstErr) {
+          console.warn('Video+audio stream error, attempting video-only fallback:', firstErr);
+          // Strategy 2: video-only
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+              audio: false,
+            });
+          } catch (secondErr) {
+            console.warn('Constrained video failed, attempting basic video:', secondErr);
+            // Strategy 3: basic video
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false,
+              });
+            } catch (finalErr) {
+              console.warn('All camera attempts failed:', finalErr);
+              stream = null;
+            }
+          }
+        }
 
         if (!isMounted) {
-          stream.getTracks().forEach((t) => t.stop());
+          if (stream) stream.getTracks().forEach((t) => t.stop());
           return;
         }
 
-        setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-          localVideoRef.current.muted = true;
-          localVideoRef.current.playsInline = true;
-          localVideoRef.current.onloadedmetadata = () => {
-            localVideoRef.current?.play().catch((e) => console.warn('Local video play error:', e));
-          };
-        }
+        if (stream) {
+          setLocalStream(stream);
 
-        // Setup audio level analyser for live speaking waves
-        try {
-          const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-          const ctx = new AudioContextClass();
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 64;
-          const source = ctx.createMediaStreamSource(stream);
-          source.connect(analyser);
-          audioContextRef.current = ctx;
-          analyserRef.current = analyser;
+          // Setup audio level analyser for live speaking waves if audio track exists
+          if (stream.getAudioTracks().length > 0) {
+            try {
+              const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+              const ctx = new AudioContextClass();
+              const analyser = ctx.createAnalyser();
+              analyser.fftSize = 64;
+              const source = ctx.createMediaStreamSource(stream);
+              source.connect(analyser);
+              audioContextRef.current = ctx;
+              analyserRef.current = analyser;
 
-          const updateVolume = () => {
-            if (analyserRef.current) {
-              const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-              analyserRef.current.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i];
-              }
-              const avg = sum / dataArray.length;
-              setAudioLevel(Math.min(100, Math.max(10, avg * 1.5)));
+              const updateVolume = () => {
+                if (analyserRef.current) {
+                  const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+                  analyserRef.current.getByteFrequencyData(dataArray);
+                  let sum = 0;
+                  for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                  }
+                  const avg = sum / dataArray.length;
+                  setAudioLevel(Math.min(100, Math.max(10, avg * 1.5)));
+                }
+                animFrameRef.current = requestAnimationFrame(updateVolume);
+              };
+              updateVolume();
+            } catch (err) {
+              console.warn('Audio analyser fallback:', err);
             }
-            animFrameRef.current = requestAnimationFrame(updateVolume);
-          };
-          updateVolume();
-        } catch (err) {
-          console.warn('Audio analyser fallback:', err);
+          }
+        } else {
+          setLocalStream(null);
+          setCameraError('Camera preview in standby mode. Avatar preview active.');
         }
 
         playCallConnected();
         setPhase('active');
       } catch (err: any) {
         console.warn('Camera access fallback (permission or no device):', err);
-        setCameraError('Camera preview in standby mode. Simulated video feed active.');
+        setLocalStream(null);
+        setCameraError('Camera preview in standby mode. Avatar preview active.');
         playCallConnected();
         setPhase('active');
       }
@@ -184,6 +212,51 @@ export const VideoScreeningModal: React.FC<VideoScreeningModalProps> = ({
       handleFullCleanup();
     };
   }, [isOpen, facingMode]);
+
+  // Dedicated reactive binding for local video stream & preventing green screen buffer
+  useEffect(() => {
+    const video = localVideoRef.current;
+    if (!video || !localStream || isVideoOff) {
+      setIsLocalVideoReady(false);
+      return;
+    }
+
+    if (video.srcObject !== localStream) {
+      video.srcObject = localStream;
+    }
+    video.muted = true;
+    video.autoplay = true;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+
+    const markReady = () => {
+      if (video.videoWidth > 0 || video.readyState >= 2) {
+        setIsLocalVideoReady(true);
+      }
+    };
+
+    video.addEventListener('playing', markReady);
+    video.addEventListener('loadeddata', markReady);
+    video.addEventListener('canplay', markReady);
+
+    video.play().then(() => {
+      setIsLocalVideoReady(true);
+    }).catch((e) => {
+      console.warn('Local video play warning:', e);
+      setIsLocalVideoReady(true);
+    });
+
+    const watchdog = setTimeout(() => {
+      setIsLocalVideoReady(true);
+    }, 600);
+
+    return () => {
+      clearTimeout(watchdog);
+      video.removeEventListener('playing', markReady);
+      video.removeEventListener('loadeddata', markReady);
+      video.removeEventListener('canplay', markReady);
+    };
+  }, [localStream, isVideoOff]);
 
   // Socket listeners for screening interaction
   useEffect(() => {
@@ -544,15 +617,36 @@ export const VideoScreeningModal: React.FC<VideoScreeningModalProps> = ({
                         <VideoOff className="w-6 h-6 text-stone-500 mb-1" />
                         <span className="text-[10px]">Camera Paused</span>
                       </div>
+                    ) : !localStream ? (
+                      /* Standby / No Stream Fallback - NEVER render empty video tag which turns green in Chromium */
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-stone-950 text-stone-400 p-2 text-center relative overflow-hidden">
+                        <img
+                          src={currentProfile.avatar}
+                          alt={currentProfile.name}
+                          className="w-12 h-12 rounded-full object-cover border border-rose-500/40 mb-1.5 opacity-80"
+                        />
+                        <span className="text-[10px] text-stone-300 font-medium">Camera Standby</span>
+                        <span className="text-[9px] text-stone-500 mt-0.5">Avatar preview</span>
+                      </div>
                     ) : (
                       <>
+                        {/* Smooth dark warm-up backdrop while camera hardware decodes first frame */}
+                        {!isLocalVideoReady && (
+                          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-stone-950 text-stone-400">
+                            <div className="w-5 h-5 border-2 border-rose-500/30 border-t-rose-500 rounded-full animate-spin mb-1" />
+                            <span className="text-[9px] text-stone-400">Connecting...</span>
+                          </div>
+                        )}
                         <video
                           ref={localVideoRef}
                           autoPlay
                           playsInline
                           muted
-                          style={{ backgroundColor: '#0c0a09' }}
-                          className="w-full h-full object-cover transform -scale-x-100"
+                          style={{
+                            backgroundColor: '#0c0a09',
+                            opacity: isLocalVideoReady ? 1 : 0,
+                          }}
+                          className="w-full h-full object-cover transform -scale-x-100 transition-opacity duration-200"
                         />
                         {/* Visual Verified Badge Overlay on Local User's Video Preview */}
                         <VerifiedBadgeOverlay

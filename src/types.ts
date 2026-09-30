@@ -20,6 +20,32 @@ export interface UserProfile {
 
 export type SpaceType = 'couple' | 'friends';
 
+export interface PendingSpaceDeletion {
+  requestedBy: { id: string; name: string; avatar: string };
+  requestedAt: number;
+  agreedUserIds: string[];
+  status: 'pending' | 'cancelled' | 'confirmed';
+  totalRequired?: number;
+}
+
+export interface SavedSpaceRecord {
+  roomId: string;
+  passkey: string;
+  spaceType: SpaceType;
+  title: string;
+  partnerOrGroupName: string;
+  partnerOrGroupAvatar: string;
+  myRole: 'partner1' | 'partner2' | 'member';
+  myName: string;
+  myAvatar: string;
+  lastVisitedAt: number;
+  unreadCount?: number;
+  isCurrent?: boolean;
+  lastMessageText?: string;
+  lastMessageTime?: number;
+  createdAt?: number;
+}
+
 export interface CoupleSpaceConfig {
   roomId: string;
   passkey: string;
@@ -34,6 +60,16 @@ export interface CoupleSpaceConfig {
   anniversaryDate?: string;
   autoDeleteTimer?: number; // in seconds (0 = off)
   isVerified?: boolean;
+}
+
+export interface CallLogDetails {
+  callType: CallType;
+  status: 'missed' | 'completed' | 'declined' | 'unanswered';
+  duration?: number; // duration in seconds
+  callerId: string;
+  callerName: string;
+  isSquadCall?: boolean;
+  groupName?: string;
 }
 
 export interface EncryptedMessage {
@@ -52,6 +88,13 @@ export interface EncryptedMessage {
     fileName?: string;
     fileSize?: number;
     duration?: number; // for audio voice notes / video duration
+  };
+  callLog?: CallLogDetails;
+  replyTo?: {
+    id: string;
+    senderName: string;
+    text: string;
+    type: string;
   };
   isDeleted?: boolean;
   deletedForEveryone?: boolean;
@@ -75,12 +118,46 @@ export interface DecryptedMessage {
     fileSize?: number;
     duration?: number;
   };
+  replyTo?: {
+    id: string;
+    senderName: string;
+    text: string;
+    type: string;
+  };
+  callLog?: CallLogDetails;
   isDecrypted: boolean;
   decryptionError?: boolean;
   isDeleted?: boolean;
   deletedForEveryone?: boolean;
   isEdited?: boolean;
   editedAt?: number;
+}
+
+export interface StatusComment {
+  id: string;
+  statusId: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface FriendStatus {
+  id: string;
+  roomId: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  type: 'text' | 'image';
+  text?: string;
+  color?: string; // background color for text status
+  mediaUrl?: string; // photo/image object URL or data URL
+  caption?: string; // caption for photo
+  timestamp: number;
+  expiresAt: number; // 24 hours after timestamp
+  viewers?: string[]; // userIds of friends who viewed this status
+  comments?: StatusComment[];
 }
 
 export interface SignalData {
@@ -162,21 +239,83 @@ export interface MediaItem {
   year?: string | number;
   genre?: string;
   category?: 'romance' | 'comedy' | 'animation' | 'classic' | 'cozy' | 'short_film' | 'scifi' | 'horror' | 'documentary' | 'custom' | string;
-  type: 'youtube' | 'audio' | 'video';
+  type: 'youtube' | 'audio' | 'video' | 'embed';
   url: string;
   thumbnailUrl?: string;
   duration?: number;
   description?: string;
   rating?: string;
   tags?: string[];
-  source?: 'archive' | 'blender' | 'youtube' | 'cdn' | 'custom' | string;
+  source?: 'archive' | 'blender' | 'youtube' | 'cdn' | 'custom' | 'viduki' | string;
   badge?: string;
   streamQuality?: string;
   backdropUrl?: string;
-  streamSourceType?: 'direct_stream' | 'trailer' | 'screen_share' | 'custom';
+  streamSourceType?: 'direct_stream' | 'trailer' | 'screen_share' | 'custom' | 'viduki_embed';
   cast?: string[];
   availableOn?: string[];
   matchScore?: number;
+  imdbId?: string;
+  tmdbId?: string;
+  embedUrl?: string;
+  durationStr?: string;
+  mediaType?: 'movie' | 'tv';
+  season?: number;
+  episode?: number;
+  server?: 1 | 2 | 3 | 4 | number;
+  color?: string;
+  fallbackAvailable?: boolean;
+}
+
+export interface VidukiConfig {
+  apiKey: string;
+  baseUrl?: string;
+  embedTemplate?: string;
+  enabled: boolean;
+  preferredQuality?: string;
+  defaultServer?: 1 | 2 | 3 | 4;
+  themeColor?: string;
+  autoFallbackOnFailure?: boolean;
+}
+
+export interface VidukiFailedEvent {
+  type: 'viduki:all-servers-failed';
+  source?: string;
+  stage?: 'initial' | 'manual-switch' | 'playback-error' | string;
+  status?: number;
+  message?: string;
+  media?: {
+    type?: 'movie' | 'tv';
+    tmdbid?: string;
+    imdbid?: string;
+    season?: string | number;
+    episode?: string | number;
+  };
+}
+
+export interface VidukiWatchProgress {
+  id: string;
+  type: 'movie' | 'tv';
+  title: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  progress?: {
+    watched: number;
+    duration: number;
+  };
+  last_updated?: number;
+  number_of_episodes?: number;
+  number_of_seasons?: number;
+  last_season_watched?: string | number;
+  last_episode_watched?: string | number;
+  show_progress?: Record<string, {
+    season: number | string;
+    episode: number | string;
+    progress: {
+      watched: number;
+      duration: number;
+    };
+    last_updated: number;
+  }>;
 }
 
 export interface InMovieComment {
@@ -206,6 +345,8 @@ export interface MediaSyncState {
   updatedAt: number;
   updatedBy: string;
   updatedByName: string;
+  actionType?: 'play' | 'pause' | 'seek' | 'change' | 'next';
+  actionText?: string;
 }
 
 // Time Capsule ("Open When...") Sealed Letters
@@ -297,7 +438,22 @@ export interface SleepSanctuaryState {
 }
 
 // 2. Couple & Group Games Lounge Types
-export type GameType = 'chess' | 'connect_hearts' | 'know_me' | 'this_or_that' | 'most_likely' | 'truth_or_dare' | 'spin_bottle' | 'buzzer_battle' | 'group_trivia';
+export type GameType =
+  | 'chess'
+  | 'connect_hearts'
+  | 'draughts'
+  | 'ludo'
+  | 'candy_crush'
+  | 'battleship'
+  | 'dots_and_boxes'
+  | 'deep_cards'
+  | 'know_me'
+  | 'this_or_that'
+  | 'most_likely'
+  | 'truth_or_dare'
+  | 'spin_bottle'
+  | 'buzzer_battle'
+  | 'group_trivia';
 
 
 export interface KnowMeQuestion {
@@ -741,6 +897,44 @@ export interface SafeDatePlan {
   safetyCheckInDeadline?: number;
   safetyCheckInStatus?: 'pending' | 'checked_in_safe' | 'alert_triggered' | 'extended';
   createdAt: number;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  avatar?: string;
+  createdAt?: number;
+  spaces?: string[];
+}
+
+export interface SpaceEmailInvite {
+  id: string;
+  roomId: string;
+  passkey: string;
+  spaceName: string;
+  spaceType: SpaceType;
+  senderEmail: string;
+  senderName: string;
+  spouseEmail: string;
+  message?: string;
+  createdAt: number;
+  status: 'pending' | 'accepted' | 'declined';
+}
+
+export interface VoicemailGreeting {
+  id: string;
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  senderAvatar: string;
+  type: 'video' | 'audio';
+  mediaUrl: string;
+  durationSeconds: number;
+  caption?: string;
+  createdAt: number;
+  listened: boolean;
+  missedCallType?: 'video' | 'audio';
 }
 
 

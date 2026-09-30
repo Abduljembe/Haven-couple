@@ -164,3 +164,51 @@
   animation: auraPulseRainbow 3s ease-in-out infinite;
 }
 
+/* Input readability & high contrast typing guarantee across all OS themes */
+input:not([class*="text-"]), textarea:not([class*="text-"]) {
+  color: #0f172a;
+}
+input::placeholder, textarea::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+/* Mobile Phone Fit & Ergonomics */
+html, body {
+  height: 100%;
+  height: 100dvh;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+button, a, input, textarea, select {
+  touch-action: manipulation;
+}
+
+/* Safe Area Inset Helpers for iPhone Notches & Android Gesture Bars */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+}
+
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* Utility to hide scrollbars on mobile swipe rows while keeping smooth scrolling */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+

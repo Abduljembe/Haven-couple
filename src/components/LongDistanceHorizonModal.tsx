@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Globe2,
+  ArrowLeft,
   X,
   Sun,
   Moon,
@@ -134,26 +135,37 @@ export const LongDistanceHorizonModal: React.FC<LongDistanceHorizonModalProps> =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/65 backdrop-blur-sm animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/65 backdrop-blur-sm animate-fade-in">
       <div
         id="long-distance-horizon-modal"
-        className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-sky-100 flex flex-col max-h-[92vh]"
+        className="w-full max-w-4xl bg-white rounded-none sm:rounded-3xl shadow-2xl overflow-hidden border-0 sm:border border-sky-100 flex flex-col h-[100dvh] sm:h-auto sm:max-h-[92vh]"
       >
         {/* Header */}
-        <div className="px-5 sm:px-6 py-3.5 bg-gradient-to-r from-sky-50 via-indigo-50 to-rose-50 border-b border-sky-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-sky-500/10 border border-sky-200 flex items-center justify-center text-sky-600">
-              <Globe2 className="w-5 h-5" />
+        <div className="px-3 sm:px-6 py-2.5 sm:py-3.5 bg-gradient-to-r from-sky-50 via-indigo-50 to-rose-50 border-b border-sky-100 flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-horizon-mobile-back"
+              className="p-1.5 -ml-1 text-sky-700 hover:bg-sky-100 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-sky-500/10 border border-sky-200 flex items-center justify-center text-sky-600 shrink-0">
+              <Globe2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
-                <span>Partner Sky & Live Horizon Map</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold">
-                  Real Maps & GPS
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
+                <span>Partner Sky & Horizon Map</span>
+                <span className="hidden xs:inline-block text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold shrink-0">
+                  Real GPS
                 </span>
               </h2>
-              <p className="text-xs text-slate-500">
-                Live interactive Google Maps, exact coordinates, distance & travel times
+              <p className="text-[11px] sm:text-xs text-slate-500 truncate">
+                Live Google Maps, coordinates, distance & travel times
               </p>
             </div>
           </div>

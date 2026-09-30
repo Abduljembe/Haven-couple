@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   X,
+  ArrowLeft,
   Mail,
   Lock,
   Unlock,
@@ -186,24 +187,41 @@ export const TimeCapsuleModal: React.FC<TimeCapsuleModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-      <div className="relative w-full max-w-3xl h-[88vh] max-h-[720px] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+      <div className="relative w-full max-w-3xl h-[100dvh] sm:h-[88vh] sm:max-h-[720px] bg-slate-900 border-0 sm:border border-slate-800 rounded-none sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900/90 border-b border-slate-800 shrink-0 z-20">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-amber-500 to-rose-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20">
+        <div className="flex items-center justify-between px-3 sm:px-5 py-3 sm:py-3.5 bg-slate-900/90 border-b border-slate-800 shrink-0 z-20 sticky top-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={() => {
+                if (readingLetter) {
+                  setReadingLetter(null);
+                } else {
+                  onClose();
+                }
+              }}
+              id="btn-capsule-mobile-back"
+              className="p-1.5 -ml-1 text-amber-400 hover:bg-slate-800 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title={readingLetter ? "Back to Letters" : "Back to Chat"}
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-amber-500 to-rose-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0">
               <Mail className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-bold text-white">Time Capsule Letters</h3>
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold border border-amber-500/30 flex items-center gap-1">
+                <h3 className="text-sm sm:text-base font-bold text-white truncate">Time Capsule Letters</h3>
+                <span className="hidden xs:flex px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold border border-amber-500/30 items-center gap-1 shrink-0">
                   <Lock className="w-2.5 h-2.5" />
-                  <span>"Open When..." Sealed</span>
+                  <span>"Open When..."</span>
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Encrypted letters sealed with love for future moments with {partner ? partner.name : partnerName}
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Encrypted letters sealed with love for {partner ? partner.name : partnerName}
               </p>
             </div>
           </div>
@@ -214,7 +232,7 @@ export const TimeCapsuleModal: React.FC<TimeCapsuleModalProps> = ({
               setReadingLetter(null);
               onClose();
             }}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full transition-colors cursor-pointer"
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>

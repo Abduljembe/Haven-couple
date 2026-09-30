@@ -11,22 +11,58 @@ import {
   Lock,
   PartyPopper,
   Gamepad2,
+  Share2,
+  Copy,
+  Check,
+  Dice5,
+  RefreshCw,
+  X,
+  Mail,
 } from 'lucide-react';
 import { CoupleSpaceConfig, SpaceType } from '../types';
 import { generateRandomPasskey } from '../utils/crypto';
 import { AvatarPicker } from './AvatarPicker';
 import { DEFAULT_AVATARS } from '../utils/avatarUtils';
 import { HavenLogo } from './HavenLogo';
+import { PWAInstallButton } from './PWAInstallButton';
+import { trackUserProfile } from '../utils/authService';
+
+const generateUniqueRoomCode = (type: SpaceType) => {
+  const coupleAdjectives = ['lovers', 'serene', 'velvet', 'aurora', 'cosmic', 'forever', 'tender', 'golden', 'eternal', 'starlight'];
+  const coupleNouns = ['sanctuary', 'haven', 'oasis', 'nest', 'bloom', 'harbor', 'retreat', 'cove', 'heart', 'isle'];
+  
+  const squadAdjectives = ['squad', 'nexus', 'chaos', 'vibes', 'gamers', 'chill', 'hype', 'galaxy', 'epic', 'alpha'];
+  const squadNouns = ['hangout', 'lounge', 'circle', 'hq', 'zone', 'hub', 'crew', 'den', 'party', 'room'];
+
+  const adjs = type === 'friends' ? squadAdjectives : coupleAdjectives;
+  const nouns = type === 'friends' ? squadNouns : coupleNouns;
+  const adj = adjs[Math.floor(Math.random() * adjs.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const num = Math.floor(1000 + Math.random() * 9000);
+  return `${adj}-${noun}-${num}`;
+};
 
 interface SetupSpaceModalProps {
   onComplete: (config: CoupleSpaceConfig) => void;
   initialError?: string | null;
   onOpenSingles?: () => void;
+  onClose?: () => void;
+  initialMode?: 'create' | 'join';
+  initialSpaceType?: SpaceType;
+  onOpenAuth?: (mode: 'login' | 'register') => void;
 }
 
-export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, initialError, onOpenSingles }) => {
-  const [spaceType, setSpaceType] = useState<SpaceType>('couple');
-  const [mode, setMode] = useState<'create' | 'join'>('create');
+export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ 
+  onComplete, 
+  initialError, 
+  onOpenSingles,
+  onClose,
+  initialMode = 'create',
+  initialSpaceType = 'couple',
+  onOpenAuth,
+}) => {
+  const [spaceType, setSpaceType] = useState<SpaceType>(initialSpaceType);
+  const [mode, setMode] = useState<'create' | 'join'>(initialMode);
   const [groupName, setGroupName] = useState('');
   const [groupEmoji, setGroupEmoji] = useState('🎉');
   const [roomId, setRoomId] = useState('');
@@ -37,6 +73,7 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
   const [partnerAvatar, setPartnerAvatar] = useState(DEFAULT_AVATARS[1]);
   const [anniversaryDate, setAnniversaryDate] = useState('');
   const [error, setError] = useState(initialError || '');
+  const [copiedInviteLink, setCopiedInviteLink] = useState(false);
 
   useEffect(() => {
     if (initialError) {
@@ -70,9 +107,7 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
         setRoomId(urlRoom);
         setMode('join');
       } else {
-        const prefix = spaceType === 'friends' ? 'squad' : 'haven';
-        const randId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
-        setRoomId(randId);
+        setRoomId(generateUniqueRoomCode(urlType === 'friends' ? 'friends' : 'couple'));
       }
 
       if (urlKey) {
@@ -85,7 +120,7 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
         setAnniversaryDate(urlAnniversary);
       }
     } catch {
-      setRoomId(`haven-${Math.floor(1000 + Math.random() * 9000)}`);
+      setRoomId(generateUniqueRoomCode('couple'));
       setPasskey(generateRandomPasskey());
     }
   }, []);
@@ -131,6 +166,13 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
     // Save to local storage for quick reconnection
     try {
       localStorage.setItem('haven_couple_config', JSON.stringify(config));
+      const savedUserId = localStorage.getItem('haven_user_id') || `user-${Date.now()}`;
+      trackUserProfile({
+        id: savedUserId,
+        name: config.userName,
+        avatar: config.userAvatar,
+        spaceId: config.roomId,
+      });
     } catch {
       // ignore
     }
@@ -152,6 +194,17 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
               : 'bg-gradient-to-br from-rose-500 via-pink-500 to-rose-600'
           }`}
         >
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="absolute top-4 right-4 p-2 rounded-full bg-black/20 text-white hover:bg-black/40 transition-colors z-10 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+
           <div className="absolute -top-12 -right-12 w-36 h-36 rounded-full bg-white/10 blur-xl pointer-events-none" />
           <div className="absolute -bottom-8 -left-8 w-28 h-28 rounded-full bg-white/10 blur-lg pointer-events-none" />
 
@@ -177,6 +230,22 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
           </div>
         </div>
 
+        {onOpenAuth && (
+          <div className="px-6 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-600">
+            <span className="flex items-center gap-1.5">
+              <Mail className="w-3.5 h-3.5 text-rose-500" />
+              <span>Have an account or spouse invite?</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => onOpenAuth('login')}
+              className="text-rose-600 font-semibold hover:underline cursor-pointer"
+            >
+              Sign In with Email &rarr;
+            </button>
+          </div>
+        )}
+
         {/* Space Type Selector (Couples vs Friends Squad) */}
         <div className="p-6">
           <div className="mb-4">
@@ -189,7 +258,7 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
                 id="btn-select-couple-mode"
                 onClick={() => {
                   setSpaceType('couple');
-                  if (mode === 'create') setRoomId(`haven-${Math.floor(1000 + Math.random() * 9000)}`);
+                  if (mode === 'create') setRoomId(generateUniqueRoomCode('couple'));
                 }}
                 className={`py-2.5 px-3 rounded-xl font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
                   spaceType === 'couple'
@@ -205,7 +274,7 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
                 id="btn-select-friends-mode"
                 onClick={() => {
                   setSpaceType('friends');
-                  if (mode === 'create') setRoomId(`squad-${Math.floor(1000 + Math.random() * 9000)}`);
+                  if (mode === 'create') setRoomId(generateUniqueRoomCode('friends'));
                 }}
                 className={`py-2.5 px-3 rounded-xl font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
                   spaceType === 'friends'
@@ -223,8 +292,8 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
               </p>
             )}
 
-            {/* Singles Lounge Banner */}
-            {onOpenSingles && (
+            {/* Singles Lounge Banner (Only shown outside couple space) */}
+            {onOpenSingles && spaceType !== 'couple' && (
               <div className="mt-3.5 p-3 bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border border-rose-200 rounded-2xl flex items-center justify-between gap-3 shadow-sm">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-rose-500 to-amber-500 flex items-center justify-center text-white shrink-0 shadow-sm">
@@ -378,16 +447,27 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
 
             {/* Space ID */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                Room Code / ID
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Room Code / ID
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setRoomId(generateUniqueRoomCode(spaceType))}
+                  className="text-[11px] text-rose-600 hover:text-rose-700 font-medium cursor-pointer flex items-center gap-1"
+                  title="Generate a memorable unique room code"
+                >
+                  <Dice5 className="w-3.5 h-3.5" />
+                  <span>Roll Unique Code</span>
+                </button>
+              </div>
               <div className="relative">
                 <Sparkles className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   id="input-room-id"
                   type="text"
                   required
-                  placeholder="e.g. squad-friday-hangout"
+                  placeholder="e.g. lovers-haven-7489"
                   value={roomId}
                   onChange={(e) => setRoomId(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-colors"
@@ -395,8 +475,8 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
               </div>
               <p className="text-[11px] text-slate-500 mt-1">
                 {spaceType === 'friends'
-                  ? 'Share this Room Code and Passkey with any number of friends to let them join!'
-                  : 'Share this Room Code with your partner so they can join your private space.'}
+                  ? 'Anyone with this unique Room Code & Passkey can join your Squad room anytime!'
+                  : 'Share this unique Room Code with your partner so they can join your forever sanctuary.'}
               </p>
             </div>
 
@@ -433,6 +513,75 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
                 </span>
               </div>
             </div>
+
+            {/* Instant Invite Link & Share Card */}
+            {roomId.trim() && passkey.trim() && (
+              <div className="p-3 bg-gradient-to-r from-rose-50/80 via-purple-50/50 to-indigo-50/80 border border-rose-200/80 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Share2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Instant Space Invite Link</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                    Indefinite Storage 🟢
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${typeof window !== 'undefined' ? window.location.origin : ''}/?room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passkey)}&type=${spaceType}`}
+                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-600 truncate select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const origin = window.location.origin;
+                      const url = `${origin}/?room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passkey)}&type=${spaceType}`;
+                      const text = spaceType === 'friends'
+                        ? `Join our Squad Room! Room Code: #${roomId}\n${url}`
+                        : `Join our private Sanctuary space! Room Code: #${roomId}\n${url}`;
+
+                      if (navigator.share) {
+                        try {
+                          await navigator.share({ title: `Haven #${roomId}`, text, url });
+                          return;
+                        } catch {
+                          // fallback
+                        }
+                      }
+                      try {
+                        await navigator.clipboard.writeText(url);
+                        setCopiedInviteLink(true);
+                        setTimeout(() => setCopiedInviteLink(false), 2500);
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer ${
+                      copiedInviteLink
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-900 text-white hover:bg-rose-600'
+                    }`}
+                  >
+                    {copiedInviteLink ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy Link</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight">
+                  Send this link to someone or give them the Room Code <strong>#{roomId}</strong>. All messages and media remain preserved indefinitely until mutual permanent deletion.
+                </p>
+              </div>
+            )}
 
             {/* Anniversary Date (Optional for Couples) */}
             {spaceType === 'couple' && (
@@ -475,6 +624,11 @@ export const SetupSpaceModal: React.FC<SetupSpaceModalProps> = ({ onComplete, in
                 </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
+
+              {/* Install App helper button */}
+              <div className="pt-2">
+                <PWAInstallButton variant="full" />
+              </div>
             </div>
           </form>
         </div>

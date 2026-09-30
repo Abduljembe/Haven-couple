@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Moon,
+  ArrowLeft,
   X,
   Volume2,
   VolumeX,
@@ -141,32 +142,43 @@ export const SleepSanctuaryModal: React.FC<SleepSanctuaryModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-fade-in">
       <div
         id="sleep-sanctuary-modal"
-        className="w-full max-w-xl bg-slate-950 border border-indigo-900/60 rounded-3xl shadow-2xl overflow-hidden text-slate-100 flex flex-col max-h-[90vh]"
+        className="w-full max-w-xl bg-slate-950 border-0 sm:border border-indigo-900/60 rounded-none sm:rounded-3xl shadow-2xl overflow-hidden text-slate-100 flex flex-col h-[100dvh] sm:h-auto sm:max-h-[90vh]"
       >
         {/* Header */}
-        <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-b border-indigo-900/40 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
-              <Moon className="w-5 h-5" />
+        <div className="px-3 sm:px-6 py-3 sm:py-5 bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-b border-indigo-900/40 flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-sleep-mobile-back"
+              className="p-1.5 -ml-1 text-indigo-300 hover:bg-indigo-900/60 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 shrink-0">
+              <Moon className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-indigo-100 flex items-center gap-2">
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold text-indigo-100 flex items-center gap-2 truncate">
                 <span>Sleep Sanctuary</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 border border-indigo-700/50">
+                <span className="hidden xs:inline-block text-[10px] px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 border border-indigo-700/50 shrink-0">
                   Night Lounge
                 </span>
               </h2>
-              <p className="text-xs text-indigo-300/80">
-                Shared ambient soundscapes & zero-burn sleep clock for two
+              <p className="text-[11px] sm:text-xs text-indigo-300/80 truncate">
+                Shared ambient soundscapes & sleep clock
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>

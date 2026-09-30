@@ -5,7 +5,7 @@
 
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext {
+export function getAudioContext(): AudioContext {
   if (!audioCtx) {
     const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     audioCtx = new AudioContextClass();
@@ -14,6 +14,83 @@ function getAudioContext(): AudioContext {
     audioCtx.resume();
   }
   return audioCtx;
+}
+
+export function unlockAudioContext(): void {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  } catch {
+    // AudioContext blocked or not available
+  }
+}
+
+/**
+ * Route a MediaStream directly into the unlocked Web Audio API destination.
+ * This guarantees pristine audio playback through the user's speakers,
+ * overcoming browser HTMLMediaElement background throttling or autoplay locks.
+ */
+export function attachStreamToAudioContext(stream: MediaStream): () => void {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    let source: MediaStreamAudioSourceNode | null = null;
+    let gainNode: GainNode | null = null;
+    let isConnected = false;
+
+    const connectAudio = () => {
+      if (isConnected) return;
+      const liveAudioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
+      if (liveAudioTracks.length === 0) return;
+
+      try {
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+        source = ctx.createMediaStreamSource(stream);
+        gainNode = ctx.createGain();
+        gainNode.gain.value = 1.0;
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        isConnected = true;
+        console.log('[WebAudio] Successfully routed remote audio directly to speakers!');
+      } catch (err) {
+        console.warn('[WebAudio] Could not create MediaStreamSource:', err);
+      }
+    };
+
+    // Try connecting immediately
+    connectAudio();
+
+    // Listen for dynamically added audio tracks (from ontrack or unmuting)
+    const handleTrackAdded = (e: MediaStreamTrackEvent) => {
+      if (e.track.kind === 'audio') {
+        e.track.enabled = true;
+        connectAudio();
+      }
+    };
+
+    stream.addEventListener('addtrack', handleTrackAdded);
+
+    return () => {
+      stream.removeEventListener('addtrack', handleTrackAdded);
+      try {
+        if (source) source.disconnect();
+        if (gainNode) gainNode.disconnect();
+      } catch {
+        // ignore on cleanup
+      }
+      isConnected = false;
+    };
+  } catch (err) {
+    console.warn('Could not attach stream to Web Audio context:', err);
+    return () => {};
+  }
 }
 
 let ringtoneInterval: number | null = null;
@@ -646,5 +723,165 @@ export function playVoicePromptSynthesizer(durationSec: number = 7, onEnded?: ()
     return () => {};
   }
 }
+
+// --- Board & Casual Games Audio Cues (Draughts, Ludo, Candy Crush) ---
+export function playBoardMoveSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420, now);
+    osc.frequency.exponentialRampToValueAtTime(260, now + 0.08);
+
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  } catch {}
+}
+
+export function playDiceRollSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 4; i++) {
+      const clickTime = now + i * 0.045;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(300 + Math.random() * 250, clickTime);
+      gain.gain.setValueAtTime(0.25, clickTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, clickTime + 0.035);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(clickTime);
+      osc.stop(clickTime + 0.04);
+    }
+  } catch {}
+}
+
+export function playCandyMatchSound(comboLevel: number = 1) {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const baseFreq = Math.min(1200, 523.25 * Math.pow(1.12, comboLevel));
+    const osc = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc2.type = 'triangle';
+    osc.frequency.setValueAtTime(baseFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, now + 0.12);
+    osc2.frequency.setValueAtTime(baseFreq * 2, now);
+    osc2.frequency.exponentialRampToValueAtTime(baseFreq * 2.5, now + 0.12);
+
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+
+    osc.connect(gain);
+    osc2.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc2.start(now);
+    osc.stop(now + 0.16);
+    osc2.stop(now + 0.16);
+  } catch {}
+}
+
+export function playCandySpecialSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const chord = [523.25, 659.25, 783.99, 1046.5];
+    chord.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = now + idx * 0.03;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.25, t + 0.2);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.22);
+    });
+  } catch {}
+}
+
+/**
+ * Alexa-style wake chime (pleasant rising two-tone prompt: e.g. D5 -> G5)
+ * Triggered when user says "Haven" or taps the voice assistant mic.
+ */
+export function playVoiceWakeChime() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Tone 1 (587.33 Hz - D5)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now);
+    gain1.gain.setValueAtTime(0.28, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.15);
+
+    // Tone 2 (783.99 Hz - G5)
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(783.99, now + 0.11);
+    gain2.gain.setValueAtTime(0.3, now + 0.11);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.11);
+    osc2.stop(now + 0.33);
+  } catch {}
+}
+
+/**
+ * Alexa-style command confirmation chime (warm harmonic chime)
+ * Triggered when "Haven play ..." succeeds.
+ */
+export function playVoiceSuccessChime() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const notes = [659.25, 783.99, 1046.5]; // E5, G5, C6
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = now + idx * 0.07;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.22, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.29);
+    });
+  } catch {}
+}
+
 
 

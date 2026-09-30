@@ -1,0 +1,11 @@
+{
+  "apiKey": "",
+  "baseUrl": "https://viduki.net/api",
+  "embedTemplate": "https://viduki.net/{server}/movie/{id}?color={color}",
+  "enabled": true,
+  "preferredQuality": "1080p Ultra HD",
+  "defaultServer": 1,
+  "themeColor": "f43f5e",
+  "autoFallbackOnFailure": true,
+  "updatedAt": 1790193256016
+}

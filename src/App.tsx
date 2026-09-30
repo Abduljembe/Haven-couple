@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
+import { triggerHaptic } from './utils/haptics';
 import {
   CallStatus,
   CallType,
@@ -26,6 +27,10 @@ import {
   SyncMusicState,
   ActiveSquadCallState,
   SingleProfile,
+  VoicemailGreeting,
+  CallLogDetails,
+  FriendStatus,
+  StatusComment,
 } from './types';
 import {
   deriveKeyFromPasskey,
@@ -43,15 +48,21 @@ import {
   playHeartbeatSound,
   playMessageChime,
   playSoundboardById,
+  unlockAudioContext,
 } from './utils/sounds';
 import { WebRTCManager } from './utils/webrtc';
 import { SquadCallManager } from './utils/squadCallManager';
-import { Music, Play, Pause } from 'lucide-react';
+import { Music, Play, Pause, Heart, X } from 'lucide-react';
 import { SetupSpaceModal } from './components/SetupSpaceModal';
+import { SpaceChooserModal } from './components/SpaceChooserModal';
+import { LandingPage } from './components/LandingPage';
+import { AuthModal } from './components/AuthModal';
+import { InviteSpouseModal } from './components/InviteSpouseModal';
 import { TopBar } from './components/TopBar';
 import { ChatArea } from './components/ChatArea';
 import { AudioCallModal } from './components/AudioCallModal';
 import { VideoCallModal } from './components/VideoCallModal';
+import { CallDiagnosticsModal } from './components/CallDiagnosticsModal';
 import { SquadCallModal } from './components/SquadCallModal';
 import { IncomingCallModal } from './components/IncomingCallModal';
 import { SecurityVerifyModal } from './components/SecurityVerifyModal';
@@ -76,10 +87,35 @@ import { MusicLoungeModal } from './components/MusicLoungeModal';
 import { SoundboardModal } from './components/SoundboardModal';
 import { SpaceFeaturesModal } from './components/SpaceFeaturesModal';
 import { SinglesLoungeModal } from './components/SinglesLoungeModal';
+import { HavenStatusModal } from './components/HavenStatusModal';
+import { HavenBottomNav } from './components/HavenBottomNav';
+import { ActivityLogModal } from './components/ActivityLogModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { SpacesManagerModal } from './components/SpacesManagerModal';
+import { QRCodePairingModal } from './components/QRCodePairingModal';
+import { PWAInstallModal } from './components/PWAInstallModal';
+import { VoicemailModal } from './components/VoicemailModal';
+import {
+  sendBrowserNotification,
+  sendIncomingCallPushNotification,
+  sendMessagePushNotification,
+  sendVoicemailPushNotification,
+} from './utils/notifications';
+import {
+  recordSpaceVisit,
+  spaceRecordToConfig,
+  getSavedSpaces,
+  updateSpaceLastMessage,
+  saveMessagesForSpace,
+  getMessagesForSpace,
+} from './utils/spaceRegistry';
+import { SavedSpaceRecord, AuthUser, SpaceEmailInvite, SpaceType } from './types';
 import { MUSIC_CATALOG, musicEngine } from './utils/musicEngine';
 import { getSavedTheme, saveTheme, THEME_PRESETS, ThemeConfig, ThemeId, ColorMode, getSavedColorMode, saveColorMode } from './utils/theme';
 import { WallpaperSettings, getSavedWallpaperSettings, saveWallpaperSettings } from './utils/wallpaper';
 import { detectRealDeviceLocation } from './utils/geolocation';
+import { getStoredAuthUser, getMe, logoutUser, acceptSpaceInvite, getInvitesForEmail, trackUserProfile } from './utils/authService';
+import { DEFAULT_AVATARS } from './utils/avatarUtils';
 
 export default function App() {
   // Space & Authentication Config
@@ -110,9 +146,259 @@ export default function App() {
   const [currentThemeId, setCurrentThemeId] = useState<ThemeId>(() => getSavedTheme());
   const [colorMode, setColorMode] = useState<ColorMode>(() => getSavedColorMode());
   const [isSpaceFeaturesOpen, setIsSpaceFeaturesOpen] = useState(false);
+  const [showActivityLogModal, setShowActivityLogModal] = useState(false);
   const [showThemePickerModal, setShowThemePickerModal] = useState(false);
   const [showVibeSelectorModal, setShowVibeSelectorModal] = useState(false);
   const [isScreenRumbling, setIsScreenRumbling] = useState(false);
+  const [isChatFullscreen, setIsChatFullscreen] = useState(false);
+
+  const handleToggleChatFullscreen = useCallback(async () => {
+    setIsChatFullscreen((prev) => {
+      const next = !prev;
+      if (next) {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      } else {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  // Sync fullscreen change events & keyboard shortcuts (F to toggle, Esc to exit)
+  useEffect(() => {
+    const handleFSChange = () => {
+      const isFS = Boolean(document.fullscreenElement);
+      setIsChatFullscreen(isFS);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      const isInput = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable;
+      if (e.key === 'Escape' && isChatFullscreen) {
+        handleToggleChatFullscreen();
+      } else if ((e.key === 'f' || e.key === 'F') && !isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        handleToggleChatFullscreen();
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFSChange);
+    document.addEventListener('webkitfullscreenchange', handleFSChange);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFSChange);
+      document.removeEventListener('webkitfullscreenchange', handleFSChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isChatFullscreen, handleToggleChatFullscreen]);
+
+  // User Authentication & Spouse Invites State
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => getStoredAuthUser());
+  const [pendingInvites, setPendingInvites] = useState<SpaceEmailInvite[]>([]);
+  const [liveIncomingInviteToast, setLiveIncomingInviteToast] = useState<SpaceEmailInvite | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'reset'>('login');
+  const [authModalReason, setAuthModalReason] = useState<string | undefined>(undefined);
+  const [isInviteSpouseOpen, setIsInviteSpouseOpen] = useState(false);
+  const [showLanding, setShowLanding] = useState<boolean>(() => !localStorage.getItem('haven_couple_config'));
+  const [showSpaceChooser, setShowSpaceChooser] = useState(false);
+  const [isSetupSpaceOpen, setIsSetupSpaceOpen] = useState(false);
+  const [setupInitialMode, setSetupInitialMode] = useState<'create' | 'join'>('create');
+  const [setupInitialType, setSetupInitialType] = useState<SpaceType>('couple');
+
+  // Keep authUserRef in sync for real-time socket events and periodic sync
+  const authUserRef = useRef<AuthUser | null>(authUser);
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+
+  // Load auth state and check for spouse invites on mount
+  useEffect(() => {
+    getMe().then((res) => {
+      if (res) {
+        setAuthUser(res.user);
+        setPendingInvites(res.pendingInvites || []);
+      }
+    });
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const invitedEmail = params.get('invitedEmail');
+      if (invitedEmail) {
+        getInvitesForEmail(invitedEmail).then((invs) => {
+          if (invs && invs.length > 0) {
+            setPendingInvites(invs);
+          }
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Robust recurring synchronization for pending space invitations
+  // Ensures any invite sent to this user or registered partner immediately appears in their chat
+  useEffect(() => {
+    let isMounted = true;
+    const syncInvites = async () => {
+      const activeUser = authUserRef.current || getStoredAuthUser();
+      const email = activeUser?.email?.trim().toLowerCase();
+      const userId = activeUser?.id;
+      if (!email && !userId) return;
+
+      try {
+        const invs = await getInvitesForEmail(email, userId);
+        if (isMounted && Array.isArray(invs)) {
+          const pending = invs.filter((i) => i.status === 'pending');
+          setPendingInvites((prev) => {
+            // Check if there is an actual change to prevent unnecessary re-renders
+            const prevIds = prev.map((p) => p.id).sort().join(',');
+            const nextIds = pending.map((p) => p.id).sort().join(',');
+            if (prevIds !== nextIds) {
+              // If a new pending invite was found, show the live incoming invite toast banner
+              const newIncoming = pending.find((p) => !prev.some((old) => old.id === p.id));
+              if (newIncoming) {
+                setLiveIncomingInviteToast(newIncoming);
+              }
+              return pending;
+            }
+            return prev;
+          });
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    // Run immediately and periodically
+    syncInvites();
+    const interval = setInterval(syncInvites, 3500);
+    window.addEventListener('focus', syncInvites);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      window.removeEventListener('focus', syncInvites);
+    };
+  }, []);
+
+  const handleSelectDestination = (destination: 'spouse' | 'friends' | 'single') => {
+    setShowSpaceChooser(false);
+    if (destination === 'spouse') {
+      const coupleRoomId = `haven-couple-${authUser?.id?.slice(-6) || Math.floor(Math.random() * 8999 + 1000)}`;
+      const couplePasskey = 'sanctuary-love';
+      const newConfig: CoupleSpaceConfig = {
+        roomId: coupleRoomId,
+        passkey: couplePasskey,
+        spaceType: 'couple',
+        userRole: 'partner1',
+        userName: authUser?.name || 'Spouse',
+        userAvatar: authUser?.avatar || DEFAULT_AVATARS[0],
+        partnerName: 'My Spouse',
+        partnerAvatar: DEFAULT_AVATARS[1],
+        isVerified: false,
+      };
+      recordSpaceVisit(newConfig);
+      setConfig(newConfig);
+      setShowLanding(false);
+    } else if (destination === 'friends') {
+      setSetupInitialMode('create');
+      setSetupInitialType('friends');
+      setIsSetupSpaceOpen(true);
+    } else if (destination === 'single') {
+      setIsSinglesLoungeOpen(true);
+    }
+  };
+
+  const handleAuthSuccess = (user: AuthUser) => {
+    setAuthUser(user);
+    try {
+      localStorage.setItem('haven_user_id', user.id);
+    } catch {
+      // ignore
+    }
+    trackUserProfile({
+      id: user.id,
+      name: user.name,
+      avatar: user.avatar,
+      email: user.email,
+      spaceId: config?.roomId,
+    });
+    getMe().then((res) => {
+      if (res) {
+        setPendingInvites(res.pendingInvites || []);
+      }
+    });
+    // Automatically open destination chooser (Spouse, Friends, Single)
+    setShowSpaceChooser(true);
+  };
+
+  // Automatically track and sync active user profile in persistent users_storage.json
+  useEffect(() => {
+    const activeUserId = authUser?.id || currentUserId;
+    const activeName = authUser?.name || config?.userName;
+    const activeAvatar = authUser?.avatar || config?.userAvatar;
+    const activeEmail = authUser?.email;
+    const activeSpaceId = config?.roomId;
+
+    if (activeUserId && activeName) {
+      trackUserProfile({
+        id: activeUserId,
+        name: activeName,
+        avatar: activeAvatar,
+        email: activeEmail,
+        spaceId: activeSpaceId,
+      });
+    }
+  }, [authUser?.id, authUser?.name, authUser?.email, currentUserId, config?.userName, config?.userAvatar, config?.roomId]);
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setAuthUser(null);
+    setPendingInvites([]);
+  };
+
+  const handleAcceptInvite = async (invite: SpaceEmailInvite) => {
+    try {
+      // Save current messages first if in an active room
+      if (config?.roomId && messages.length > 0) {
+        saveMessagesForSpace(config.roomId, messages);
+      }
+
+      await acceptSpaceInvite(invite.id, authUser?.email);
+      const newConfig: CoupleSpaceConfig = {
+        roomId: invite.roomId,
+        passkey: invite.passkey,
+        spaceType: invite.spaceType,
+        userRole: 'partner2',
+        userName: authUser?.name || config?.userName || 'Partner',
+        userAvatar: authUser?.avatar || config?.userAvatar || DEFAULT_AVATARS[1],
+        partnerName: invite.senderName,
+        partnerAvatar: DEFAULT_AVATARS[0],
+        isVerified: false,
+      };
+      recordSpaceVisit(newConfig);
+
+      // Load persistent history for this space so messages are always retained
+      const cachedMsgs = getMessagesForSpace(invite.roomId);
+      setMessages(cachedMsgs);
+
+      setConfig(newConfig);
+      setSavedSpaces(getSavedSpaces());
+      setShowLanding(false);
+      setPendingInvites((prev) => prev.filter((i) => i.id !== invite.id));
+
+      playMessageChime(true);
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 },
+      });
+    } catch (err) {
+      console.error('Failed to accept invite:', err);
+    }
+  };
 
   // Sync dark class on documentElement for styling & Tailwind
   useEffect(() => {
@@ -131,7 +417,7 @@ export default function App() {
     });
   };
 
-  // WhatsApp Chat Wallpaper state
+  // Haven Chat Wallpaper state
   const [wallpaperSettings, setWallpaperSettings] = useState<WallpaperSettings>(() => getSavedWallpaperSettings());
   const [showWallpaperPickerModal, setShowWallpaperPickerModal] = useState(false);
 
@@ -187,6 +473,10 @@ export default function App() {
   });
   const [autoDeleteTimer, setAutoDeleteTimer] = useState<number>(0);
 
+  // Saved Spaces & Connected Toast States
+  const [savedSpaces, setSavedSpaces] = useState<SavedSpaceRecord[]>(() => getSavedSpaces());
+  const [partnerAcceptedToast, setPartnerAcceptedToast] = useState<{ name: string; spaceName: string } | null>(null);
+
   // Calling States
   const [activeCallType, setActiveCallType] = useState<CallType | null>(null);
   const [callStatus, setCallStatus] = useState<CallStatus>('idle');
@@ -205,6 +495,25 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isAudioCallMinimized, setIsAudioCallMinimized] = useState(false);
+  const [isSquadCallMinimized, setIsSquadCallMinimized] = useState(false);
+  const [isNoiseCancellationActive, setIsNoiseCancellationActive] = useState(true);
+  const [isEchoSuppressionActive, setIsEchoSuppressionActive] = useState(true);
+
+  // Haven Call History Tracking & Ringing Timeout Context
+  const callContextRef = useRef<{
+    callType: CallType;
+    callerId: string;
+    callerName: string;
+    startedAt: number;
+    connectedAt: number | null;
+    status: CallStatus;
+    logged: boolean;
+    isSquadCall?: boolean;
+    groupName?: string;
+  } | null>(null);
+  const callRingingTimeoutRef = useRef<number | null>(null);
+  const squadCallStartTimeRef = useRef<number | null>(null);
 
   // Live Love Canvas State
   const [isCanvasOpen, setIsCanvasOpen] = useState(false);
@@ -244,6 +553,7 @@ export default function App() {
 
   // 2. Couple Games Lounge State
   const [isGamesLoungeOpen, setIsGamesLoungeOpen] = useState(false);
+  const [gamesLoungeTab, setGamesLoungeTab] = useState<GameType>('connect_hearts');
   const [isChessModalOpen, setIsChessModalOpen] = useState(false);
 
   // 3. Secret Polaroids Vault State
@@ -341,6 +651,7 @@ export default function App() {
   // Modals & Overlays
   const [showSecurityModal, setShowSecurityModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isSpacesManagerOpen, setIsSpacesManagerOpen] = useState(false);
   const [isSinglesLoungeOpen, setIsSinglesLoungeOpen] = useState<boolean>(() => {
     try {
       return typeof window !== 'undefined' && window.location.search.includes('mode=singles');
@@ -361,10 +672,94 @@ export default function App() {
   const [loveBursts, setLoveBursts] = useState<LoveBurstEvent[]>([]);
   const [incomingInMovieComment, setIncomingInMovieComment] = useState<InMovieComment | null>(null);
   const [incomingGameAction, setIncomingGameAction] = useState<{ gameType: GameType; actionData: any; senderId: string } | null>(null);
+  const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
+  const [isQRPairingOpen, setIsQRPairingOpen] = useState(false);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+  const [isVideoCallMinimized, setIsVideoCallMinimized] = useState(false);
+  const [voicemails, setVoicemails] = useState<VoicemailGreeting[]>([]);
+  const [isVoicemailModalOpen, setIsVoicemailModalOpen] = useState(false);
+  const [voicemailModalMode, setVoicemailModalMode] = useState<'record' | 'inbox'>('inbox');
+  const [missedVoicemailCallType, setMissedVoicemailCallType] = useState<CallType | undefined>(undefined);
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+  const [statuses, setStatuses] = useState<FriendStatus[]>([]);
+  const [initialViewStatusId, setInitialViewStatusId] = useState<string | null>(null);
+
+  const hasUnreadStatus = useMemo(() => {
+    const now = Date.now();
+    return statuses.some(
+      (s) => s.userId !== currentUserId && s.expiresAt > now && !s.viewers?.includes(currentUserId)
+    );
+  }, [statuses, currentUserId]);
+
+  const [offlineQueue, setOfflineQueue] = useState<EncryptedMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('haven_offline_msg_queue');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // 1-Click Magic Link Auto-Join Handler
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const magicRoom = params.get('room');
+      const magicKey = params.get('key');
+      const magicType = (params.get('type') as SpaceType) || 'couple';
+      const magicName = params.get('name') || '';
+
+      if (magicRoom && magicKey) {
+        if (!config || config.roomId !== magicRoom || config.passkey !== magicKey) {
+          const storedUser = getStoredAuthUser();
+          const autoConfig: CoupleSpaceConfig = {
+            roomId: magicRoom,
+            passkey: magicKey,
+            userRole: 'partner2',
+            userName: config?.userName || (storedUser as any)?.name || (storedUser as any)?.displayName || 'My Love',
+            partnerName: config?.partnerName || 'Partner',
+            userAvatar: config?.userAvatar || DEFAULT_AVATARS[0],
+            partnerAvatar: config?.partnerAvatar || DEFAULT_AVATARS[1],
+            spaceType: magicType,
+            groupName: magicName || (magicType === 'friends' ? 'Our Squad' : 'Our Sanctuary'),
+            isVerified: true,
+          };
+          localStorage.setItem('haven_couple_config', JSON.stringify(autoConfig));
+          setConfig(autoConfig);
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to parse magic link:', err);
+    }
+  }, [config]);
+
+  // Flush offline queue when socket connects and browser is online
+  useEffect(() => {
+    const flushQueue = () => {
+      if (socketRef.current?.connected && offlineQueue.length > 0) {
+        offlineQueue.forEach((msg) => {
+          socketRef.current?.emit('encrypted-message', msg);
+        });
+        setOfflineQueue([]);
+        try {
+          localStorage.removeItem('haven_offline_msg_queue');
+        } catch {}
+      }
+    };
+
+    window.addEventListener('online', flushQueue);
+    if (socketRef.current?.connected && offlineQueue.length > 0) {
+      flushQueue();
+    }
+    return () => window.removeEventListener('online', flushQueue);
+  }, [offlineQueue]);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
   const webrtcRef = useRef<WebRTCManager | null>(null);
+  const currentCallTargetSocketIdRef = useRef<string | null>(null);
+  const pendingSignalsRef = useRef<{ senderSocketId: string; signal: any }[]>([]);
   const squadCallRef = useRef<SquadCallManager | null>(null);
   const cryptoKeyRef = useRef<CryptoKey | null>(null);
   cryptoKeyRef.current = cryptoKey;
@@ -373,6 +768,13 @@ export default function App() {
   // Initialize Cryptographic Key when config changes
   useEffect(() => {
     if (!config) return;
+
+    // Automatically record this space in the registry so user can switch back anytime
+    try {
+      recordSpaceVisit(config);
+    } catch (e) {
+      console.warn('Failed to record space in registry:', e);
+    }
 
     let isMounted = true;
     (async () => {
@@ -416,8 +818,25 @@ export default function App() {
       }
 
       let content = '';
+      let callLog = msg.callLog;
       if (msg.type === 'text' || msg.type === 'call_log') {
         content = await decryptText(msg.ciphertext, msg.iv, key);
+        if (!callLog && msg.type === 'call_log' && content) {
+          try {
+            const parsed = JSON.parse(content);
+            if (parsed && typeof parsed === 'object') {
+              callLog = {
+                callType: parsed.callType || (content.includes('video') ? 'video' : 'audio'),
+                status: parsed.status || (content.toLowerCase().includes('missed') ? 'missed' : 'completed'),
+                duration: parsed.duration || 0,
+                callerId: parsed.callerId || msg.senderId,
+                callerName: parsed.callerName || msg.senderName,
+                isSquadCall: parsed.isSquadCall || false,
+                groupName: parsed.groupName,
+              };
+            }
+          } catch {}
+        }
       } else if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio') {
         const decryptedBuf = await decryptBinary(msg.ciphertext, msg.iv, key);
         const mimeType = msg.fileMetadata?.mimeType || (msg.type === 'image' ? 'image/png' : msg.type === 'video' ? 'video/mp4' : 'audio/webm');
@@ -436,6 +855,8 @@ export default function App() {
         expiresAt: msg.expiresAt,
         reactions: msg.reactions,
         fileMetadata: msg.fileMetadata,
+        callLog,
+        replyTo: msg.replyTo,
         isDecrypted: true,
         isDeleted: msg.isDeleted,
         deletedForEveryone: msg.deletedForEveryone,
@@ -455,6 +876,7 @@ export default function App() {
         expiresAt: msg.expiresAt,
         reactions: msg.reactions,
         fileMetadata: msg.fileMetadata,
+        replyTo: msg.replyTo,
         isDecrypted: false,
         decryptionError: true,
         isDeleted: msg.isDeleted,
@@ -464,6 +886,68 @@ export default function App() {
       };
     }
   }, []);
+
+  // Log Haven-style Call History to End-to-End Encrypted Chat
+  const logCallHistory = useCallback(async (params: {
+    callType: CallType;
+    status: 'missed' | 'completed' | 'declined' | 'unanswered';
+    duration?: number;
+    callerId: string;
+    callerName: string;
+    isSquadCall?: boolean;
+    groupName?: string;
+  }) => {
+    if (!config || !cryptoKey) return;
+
+    try {
+      const callLogData: CallLogDetails = {
+        callType: params.callType,
+        status: params.status,
+        duration: params.duration || 0,
+        callerId: params.callerId,
+        callerName: params.callerName,
+        isSquadCall: params.isSquadCall,
+        groupName: params.groupName,
+      };
+
+      const serialized = JSON.stringify(callLogData);
+      const enc = await encryptText(serialized, cryptoKey);
+      const msgId = `call-log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const timestamp = Date.now();
+
+      const encryptedPayload: EncryptedMessage = {
+        id: msgId,
+        roomId: config.roomId,
+        senderId: currentUserId,
+        senderName: config.userName,
+        type: 'call_log',
+        ciphertext: enc.ciphertext,
+        iv: enc.iv,
+        timestamp,
+        callLog: callLogData,
+      };
+
+      const localDecrypted: DecryptedMessage = {
+        id: msgId,
+        roomId: config.roomId,
+        senderId: currentUserId,
+        senderName: config.userName,
+        type: 'call_log',
+        content: serialized,
+        timestamp,
+        callLog: callLogData,
+        isDecrypted: true,
+      };
+
+      setMessages((prev) => [...prev, localDecrypted]);
+
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('encrypted-message', encryptedPayload);
+      }
+    } catch (err) {
+      console.error('Failed to log call history:', err);
+    }
+  }, [config, cryptoKey, currentUserId]);
 
   // WebRTC Manager Setup
   const initWebRTC = useCallback((callType: CallType) => {
@@ -479,6 +963,7 @@ export default function App() {
         if (socketRef.current && config) {
           socketRef.current.emit('signal', {
             roomId: config.roomId,
+            targetSocketId: currentCallTargetSocketIdRef.current || undefined,
             signal,
           });
         }
@@ -488,14 +973,62 @@ export default function App() {
           setCallStatus('connected');
           stopRingtone();
           playCallConnected();
-        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          // Handle teardown
+          if (callRingingTimeoutRef.current) {
+            clearTimeout(callRingingTimeoutRef.current);
+            callRingingTimeoutRef.current = null;
+          }
+          if (callContextRef.current) {
+            callContextRef.current.status = 'connected';
+            if (!callContextRef.current.connectedAt) {
+              callContextRef.current.connectedAt = Date.now();
+            }
+          }
+        } else if (state === 'disconnected' || state === 'failed') {
+          console.warn('WebRTC state:', state, '— attempting global ICE restart...');
         }
+      },
+      onReconnecting: () => {
+        console.log('Reconnecting cross-border WebRTC stream...');
       },
     });
 
+    rtc.setNoiseCancellation(isNoiseCancellationActive).catch(() => {});
+    rtc.setEchoSuppression(isEchoSuppressionActive).catch(() => {});
     webrtcRef.current = rtc;
     return rtc;
+  }, [config, isNoiseCancellationActive, isEchoSuppressionActive]);
+
+  // Drain any queued early signals once peer connection and local media are ready
+  const drainPendingSignals = useCallback(async (rtc: WebRTCManager) => {
+    if (!rtc || !rtc.getIsReady()) return;
+    if (pendingSignalsRef.current.length === 0) return;
+
+    const queued = [...pendingSignalsRef.current];
+    pendingSignalsRef.current = [];
+    console.log(`[WebRTC] Processing ${queued.length} queued early signals`);
+
+    for (const item of queued) {
+      try {
+        if (item.signal.type === 'offer') {
+          console.log('[WebRTC] Processing queued offer from:', item.senderSocketId);
+          const answer = await rtc.handleOffer(item.signal as RTCSessionDescriptionInit);
+          if (socketRef.current && config) {
+            socketRef.current.emit('signal', {
+              roomId: config.roomId,
+              targetSocketId: item.senderSocketId,
+              signal: answer,
+            });
+          }
+        } else if (item.signal.type === 'answer') {
+          console.log('[WebRTC] Processing queued answer from:', item.senderSocketId);
+          await rtc.handleAnswer(item.signal as RTCSessionDescriptionInit);
+        } else {
+          await rtc.handleCandidate(item.signal);
+        }
+      } catch (err) {
+        console.warn('[WebRTC] Error processing queued signal:', err);
+      }
+    }
   }, [config]);
 
   // Squad Call Manager Initializer (Up to 5 friends mesh WebRTC)
@@ -525,9 +1058,11 @@ export default function App() {
       },
     });
 
+    mgr.setNoiseCancellation(isNoiseCancellationActive).catch(() => {});
+    mgr.setEchoSuppression(isEchoSuppressionActive).catch(() => {});
     squadCallRef.current = mgr;
     return mgr;
-  }, [config]);
+  }, [config, isNoiseCancellationActive, isEchoSuppressionActive]);
 
   // Socket Connection & Real-Time Events
   useEffect(() => {
@@ -542,20 +1077,99 @@ export default function App() {
     socket.on('connect', () => {
       socket.emit('join-space', {
         roomId: config.roomId,
+        passkey: config.passkey,
         user: {
           id: currentUserId,
           name: config.userName,
           avatar: config.userAvatar,
           statusMood: userMood,
+          email: (authUserRef.current?.email || getStoredAuthUser()?.email || '').toLowerCase().trim(),
         },
         location: myLocation,
       });
     });
 
+    // Space access denied when password doesn't match registered space
+    socket.on('space-access-denied', (data: { reason?: string; error?: string; roomId: string }) => {
+      console.warn('Access denied to space:', data);
+      const errorMsg =
+        data.reason ||
+        data.error ||
+        'Incorrect password. The password does not match the registered space. Access is blocked.';
+      setSpaceFullError(errorMsg);
+      socket.disconnect();
+      setConfig(null);
+      localStorage.removeItem('haven_couple_config');
+      setAuthModalReason(errorMsg);
+      setShowLanding(true);
+      setIsSetupSpaceOpen(true);
+    });
+
+    // Receive live spouse invitations
+    socket.on('spouse-invite-notification', (data: { spouseEmail: string; spouseId?: string; spouseName?: string; invite: SpaceEmailInvite }) => {
+      const activeUser = authUserRef.current || getStoredAuthUser();
+      const myEmail = (activeUser?.email || '').toLowerCase().trim();
+      const targetEmail = (data.spouseEmail || '').toLowerCase().trim();
+      const isTarget =
+        (myEmail && targetEmail && myEmail === targetEmail) ||
+        (activeUser?.id && data.spouseId && activeUser.id === data.spouseId) ||
+        (activeUser?.name && data.spouseName && activeUser.name.toLowerCase().trim() === data.spouseName.toLowerCase().trim()) ||
+        (!myEmail && data.invite?.roomId !== config?.roomId);
+
+      if (isTarget && data.invite) {
+        setPendingInvites((prev) => {
+          if (prev.some((inv) => inv.id === data.invite.id)) return prev;
+          return [data.invite, ...prev];
+        });
+        setLiveIncomingInviteToast(data.invite);
+        playMessageChime(true);
+        sendBrowserNotification(`Sanctuary Invitation from ${data.invite.senderName || 'Your Partner'}`, {
+          body: `You are invited to step into "${data.invite.spaceName}"! Tap to connect 💕`,
+        });
+      }
+    });
+
+    // Real-time notification when our sent invitation is accepted
+    socket.on('spouse-invite-accepted', (data: {
+      inviteId: string;
+      roomId: string;
+      spouseEmail: string;
+      senderName: string;
+      spaceName: string;
+      acceptedBy: string;
+    }) => {
+      if (config?.roomId && data.roomId.toLowerCase() === config.roomId.toLowerCase()) {
+        setPartnerAcceptedToast({
+          name: data.acceptedBy || 'Your partner',
+          spaceName: data.spaceName || 'Sanctuary',
+        });
+        playMessageChime(true);
+        confetti({ particleCount: 70, spread: 60, origin: { y: 0.5 } });
+        setTimeout(() => setPartnerAcceptedToast(null), 7000);
+      }
+    });
+
     // Space Joined & Initial History Sync
-    socket.on('space-joined', async (data: { roomId: string; users: UserProfile[]; messages: EncryptedMessage[]; anniversaryDate?: string; locations?: Record<string, HorizonLocation>; activeCall?: ActiveSquadCallState | null }) => {
+    socket.on('space-joined', async (data: {
+      roomId: string;
+      users: UserProfile[];
+      messages: EncryptedMessage[];
+      anniversaryDate?: string;
+      locations?: Record<string, HorizonLocation>;
+      activeCall?: ActiveSquadCallState | null;
+      musicState?: SyncMusicState | null;
+      mediaState?: MediaSyncState | null;
+      voicemails?: VoicemailGreeting[];
+      statuses?: FriendStatus[];
+    }) => {
       if (data.users) {
         setRoomMembers(data.users);
+      }
+      if (data.voicemails) {
+        setVoicemails(data.voicemails);
+      }
+      if (data.statuses) {
+        setStatuses(data.statuses);
       }
       if (data.activeCall) {
         setActiveSquadCall(data.activeCall);
@@ -588,6 +1202,24 @@ export default function App() {
           roomId: config.roomId,
           location: myLocation,
         });
+      }
+
+      // Sync room music state if active
+      if (data.musicState) {
+        setSyncMusicState(data.musicState);
+        if (data.musicState.isPlaying) {
+          const track = data.musicState.customTrack || MUSIC_CATALOG.find((t) => t.id === data.musicState.trackId) || MUSIC_CATALOG[0];
+          musicEngine.play(track, data.musicState.currentTime);
+        }
+      } else if (config) {
+        socket.emit('music-request-sync', { roomId: config.roomId });
+      }
+
+      // Sync room cinema / watch party media state if active
+      if (data.mediaState) {
+        setMediaSyncState(data.mediaState);
+      } else if (config) {
+        socket.emit('media-request-sync', { roomId: config.roomId });
       }
 
       // Decrypt stored message history and merge with local sanctuary storage
@@ -659,7 +1291,38 @@ export default function App() {
 
       if (encryptedMsg.senderId !== currentUserId) {
         playMessageChime(false);
+        const previewText = dec.type === 'text' ? dec.content : `Sent an encrypted ${dec.type}`;
+        if (typeof document !== 'undefined' && document.hidden) {
+          sendBrowserNotification(dec.senderName || 'Partner in Haven', {
+            body: previewText,
+          });
+        }
+        sendMessagePushNotification(dec.senderName || 'Partner in Haven', previewText, config?.roomId);
       }
+    });
+
+    // Voicemail / Offline Greetings Socket Listeners
+    socket.on('new-voicemail', (data: { voicemail: VoicemailGreeting }) => {
+      if (data.voicemail) {
+        setVoicemails((prev) => {
+          if (prev.some((v) => v.id === data.voicemail.id)) return prev;
+          return [data.voicemail, ...prev];
+        });
+        if (data.voicemail.senderId !== currentUserId) {
+          playMessageChime(true);
+          sendVoicemailPushNotification(data.voicemail.senderName, data.voicemail.type);
+        }
+      }
+    });
+
+    socket.on('voicemail-updated', (data: { voicemailId: string; listened: boolean }) => {
+      setVoicemails((prev) =>
+        prev.map((v) => (v.id === data.voicemailId ? { ...v, listened: data.listened } : v))
+      );
+    });
+
+    socket.on('voicemail-deleted', (data: { voicemailId: string }) => {
+      setVoicemails((prev) => prev.filter((v) => v.id !== data.voicemailId));
     });
 
     // Message Reaction Updated
@@ -681,7 +1344,7 @@ export default function App() {
       );
     });
 
-    // Message Deleted (WhatsApp-style: Delete for everyone / Delete for me)
+    // Message Deleted (Haven-style: Delete for everyone / Delete for me)
     socket.on('message-deleted', (data: { messageId: string; deleteForEveryone: boolean; deletedBy?: string }) => {
       setMessages((prev) => {
         if (data.deleteForEveryone) {
@@ -704,7 +1367,7 @@ export default function App() {
       });
     });
 
-    // Message Edited (WhatsApp-style: real-time decryption of edited text)
+    // Message Edited (Haven-style: real-time decryption of edited text)
     socket.on('message-edited', async (data: { messageId: string; ciphertext: string; iv: string; editedAt: number }) => {
       try {
         let updatedContent = '';
@@ -788,35 +1451,83 @@ export default function App() {
 
     // WebRTC Signaling Relay (1-on-1 calls)
     socket.on('signal', async (data: { senderSocketId: string; senderId: string; signal: unknown }) => {
-      if (!webrtcRef.current) return;
-      const rtc = webrtcRef.current;
-      const sig = data.signal as { type?: string; candidate?: string };
+      // Discard signals emitted by this specific socket to avoid feedback loops
+      if (data.senderSocketId === socket.id) return;
+      if (data.senderSocketId) {
+        currentCallTargetSocketIdRef.current = data.senderSocketId;
+      }
+      const rawSig = data.signal as any;
+      if (!rawSig) return;
 
-      if (sig.type === 'offer') {
-        const answer = await rtc.handleOffer(sig as RTCSessionDescriptionInit);
-        socket.emit('signal', {
-          roomId: config.roomId,
-          targetSocketId: data.senderSocketId,
-          signal: answer,
-        });
-      } else if (sig.type === 'answer') {
-        await rtc.handleAnswer(sig as RTCSessionDescriptionInit);
-      } else if (sig.candidate || (sig as RTCIceCandidateInit).candidate) {
-        await rtc.handleCandidate(sig as RTCIceCandidateInit);
+      if (!webrtcRef.current || !webrtcRef.current.getIsReady()) {
+        console.log('[WebRTC] Stashing early signal until peer connection finishes initialization:', rawSig.type || 'candidate');
+        pendingSignalsRef.current.push({ senderSocketId: data.senderSocketId, signal: rawSig });
+        return;
+      }
+
+      const rtc = webrtcRef.current;
+      try {
+        if (rawSig.type === 'offer') {
+          console.log('[WebRTC] Received offer from peer:', data.senderSocketId);
+          const answer = await rtc.handleOffer(rawSig as RTCSessionDescriptionInit);
+          socket.emit('signal', {
+            roomId: config.roomId,
+            targetSocketId: data.senderSocketId,
+            signal: answer,
+          });
+        } else if (rawSig.type === 'answer') {
+          console.log('[WebRTC] Received answer from peer:', data.senderSocketId);
+          await rtc.handleAnswer(rawSig as RTCSessionDescriptionInit);
+        } else {
+          // Process ICE candidate
+          await rtc.handleCandidate(rawSig);
+        }
+      } catch (err) {
+        console.warn('Error processing WebRTC signal:', err);
       }
     });
 
     // Incoming Call Notification
     socket.on('incoming-call', (data: { callType: CallType; callerName: string; callerAvatar: string; callerSocketId: string; isSquadCall?: boolean; roomId?: string }) => {
+      if (data.callerSocketId) {
+        currentCallTargetSocketIdRef.current = data.callerSocketId;
+      }
       setIncomingCallData(data);
+      callContextRef.current = {
+        callType: data.callType,
+        callerId: data.callerSocketId || 'partner',
+        callerName: data.callerName,
+        startedAt: Date.now(),
+        connectedAt: null,
+        status: 'incoming',
+        logged: false,
+        isSquadCall: data.isSquadCall || config?.spaceType === 'friends',
+      };
       startRingtone();
+      sendIncomingCallPushNotification(data.callerName, data.callType);
     });
 
     // Call Accepted by Partner
     socket.on('call-accepted', async (data: { callType: CallType; responderSocketId?: string }) => {
       stopRingtone();
       setCallStatus('connecting');
+      if (callRingingTimeoutRef.current) {
+        clearTimeout(callRingingTimeoutRef.current);
+        callRingingTimeoutRef.current = null;
+      }
+      if (callContextRef.current) {
+        callContextRef.current.status = 'connecting';
+      }
+      if (data.responderSocketId) {
+        currentCallTargetSocketIdRef.current = data.responderSocketId;
+      }
       if (webrtcRef.current) {
+        const pc = webrtcRef.current.getPeerConnection();
+        // Prevent duplicate offer generation if offer is already in flight or connection already established
+        if (pc && (pc.signalingState === 'have-local-offer' || pc.connectionState === 'connected')) {
+          console.log('[WebRTC] Call already connecting or connected, skipping duplicate offer generation');
+          return;
+        }
         try {
           const offer = await webrtcRef.current.createOffer();
           socket.emit('signal', {
@@ -834,17 +1545,45 @@ export default function App() {
     socket.on('call-declined', (data: { reason: string }) => {
       stopRingtone();
       playCallEnded();
+      if (callRingingTimeoutRef.current) {
+        clearTimeout(callRingingTimeoutRef.current);
+        callRingingTimeoutRef.current = null;
+      }
       setCallStatus('declined');
+      if (callContextRef.current && !callContextRef.current.logged) {
+        callContextRef.current.logged = true;
+        logCallHistory({
+          callType: callContextRef.current.callType,
+          status: 'declined',
+          duration: 0,
+          callerId: callContextRef.current.callerId,
+          callerName: callContextRef.current.callerName,
+          isSquadCall: callContextRef.current.isSquadCall,
+        });
+      }
+      const missedType = activeCallType || 'video';
       setTimeout(() => {
         setCallStatus('idle');
         setActiveCallType(null);
-      }, 2000);
+        // Prompt user to record an offline voicemail greeting / video message for partner
+        setVoicemailModalMode('record');
+        setMissedVoicemailCallType(missedType);
+        setIsVoicemailModalOpen(true);
+      }, 1500);
     });
 
     // Call Ended
     socket.on('call-ended', () => {
       stopRingtone();
       playCallEnded();
+      if (callRingingTimeoutRef.current) {
+        clearTimeout(callRingingTimeoutRef.current);
+        callRingingTimeoutRef.current = null;
+      }
+      if (callContextRef.current) {
+        callContextRef.current.logged = true;
+      }
+      pendingSignalsRef.current = [];
       if (webrtcRef.current) {
         webrtcRef.current.cleanup();
       }
@@ -914,6 +1653,36 @@ export default function App() {
     // Partner Mood Updated
     socket.on('partner-status-updated', (data: { statusMood: string }) => {
       setPartner((prev) => (prev ? { ...prev, statusMood: data.statusMood } : null));
+    });
+
+    // --- Haven Status Updates & Stories ---
+    socket.on('status-updated', (data: { statuses: FriendStatus[] }) => {
+      setStatuses(data.statuses || []);
+    });
+
+    socket.on('status-comment-received', (data: { statusId: string; comment: any; statuses?: FriendStatus[] }) => {
+      if (data.statuses) {
+        setStatuses(data.statuses);
+      } else if (data.comment) {
+        setStatuses((prev) =>
+          prev.map((s) =>
+            s.id === data.statusId
+              ? { ...s, comments: [...(s.comments || []), data.comment] }
+              : s
+          )
+        );
+      }
+      if (data.comment?.userId !== currentUserId) {
+        triggerHaptic('light');
+      }
+    });
+
+    socket.on('status-view-updated', (data: { statusId: string; userId: string; viewers: string[] }) => {
+      setStatuses((prev) =>
+        prev.map((s) =>
+          s.id === data.statusId ? { ...s, viewers: data.viewers || [...(s.viewers || []), data.userId] } : s
+        )
+      );
     });
 
     // Partner Profile & Avatar Updated
@@ -1051,6 +1820,9 @@ export default function App() {
       setIncomingGameAction(data);
       if (data.gameType === 'chess') {
         setIsChessModalOpen(true);
+      } else {
+        setGamesLoungeTab(data.gameType);
+        setIsGamesLoungeOpen(true);
       }
     });
 
@@ -1119,12 +1891,31 @@ export default function App() {
     };
   }, [config, cryptoKey, currentUserId, userMood, decryptPayload]);
 
-  // Persist Messages to Local Sanctuary Storage Always
+  // Persist Messages to Local Sanctuary Storage Always and maintain all conversation histories
   useEffect(() => {
     if (!config?.roomId || messages.length === 0) return;
     try {
-      localStorage.setItem(`haven_messages_${config.roomId}`, JSON.stringify(messages));
+      saveMessagesForSpace(config.roomId, messages);
       localStorage.setItem('haven_messages_history', JSON.stringify(messages));
+
+      // Update the last message snippet in saved spaces directory
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg) {
+        const text =
+          lastMsg.type === 'text'
+            ? lastMsg.content
+            : lastMsg.type === 'image'
+            ? '📷 Photo'
+            : lastMsg.type === 'video'
+            ? '🎥 Video'
+            : lastMsg.type === 'audio'
+            ? '🎙️ Voice message'
+            : lastMsg.type === 'love_ping'
+            ? '💕 Love wave'
+            : 'Encrypted message';
+        updateSpaceLastMessage(config.roomId, text, lastMsg.timestamp);
+        setSavedSpaces(getSavedSpaces());
+      }
     } catch (e) {
       console.warn('Could not cache messages to localStorage:', e);
     }
@@ -1134,21 +1925,16 @@ export default function App() {
   useEffect(() => {
     if (!config?.roomId) return;
     try {
-      const stored = localStorage.getItem(`haven_messages_${config.roomId}`) || localStorage.getItem('haven_messages_history');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMessages((prev) => {
-            if (prev.length === 0) return parsed;
-            const map = new Map<string, DecryptedMessage>();
-            parsed.forEach((m) => map.set(m.id, m));
-            prev.forEach((m) => map.set(m.id, m));
-            return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
-          });
-        }
+      const storedMsgs = getMessagesForSpace(config.roomId);
+      if (storedMsgs.length > 0) {
+        setMessages(storedMsgs);
+        return;
       }
+      // If no room-specific history yet, start fresh for this space
+      setMessages([]);
     } catch (e) {
       console.warn('Error reading cached room messages:', e);
+      setMessages([]);
     }
   }, [config?.roomId]);
 
@@ -1216,9 +2002,10 @@ export default function App() {
   const handleSendMessage = async (
     text: string,
     type: 'text' | 'image' | 'video' | 'audio' = 'text',
-    fileData?: { buffer: ArrayBuffer; mimeType: string; fileName?: string; duration?: number }
+    fileData?: { buffer: ArrayBuffer; mimeType: string; fileName?: string; duration?: number },
+    replyTo?: { id: string; senderName: string; text: string; type: string }
   ) => {
-    if (!config || !cryptoKey || !socketRef.current) return;
+    if (!config || !cryptoKey) return;
 
     try {
       let ciphertext = '';
@@ -1248,6 +2035,7 @@ export default function App() {
         iv,
         timestamp,
         expiresAt,
+        replyTo,
         fileMetadata: fileData ? {
           mimeType: fileData.mimeType,
           fileName: fileData.fileName,
@@ -1272,6 +2060,7 @@ export default function App() {
         content: localContent,
         timestamp,
         expiresAt,
+        replyTo,
         fileMetadata: encryptedPayload.fileMetadata,
         isDecrypted: true,
       };
@@ -1279,8 +2068,19 @@ export default function App() {
       setMessages((prev) => [...prev, localDecrypted]);
       playMessageChime(true);
 
-      // Emit to server
-      socketRef.current.emit('encrypted-message', encryptedPayload);
+      // Instant Offline Queueing: if offline or socket not connected, queue for sync
+      if (!navigator.onLine || !socketRef.current?.connected) {
+        setOfflineQueue((prev) => {
+          const next = [...prev, encryptedPayload];
+          try {
+            localStorage.setItem('haven_offline_msg_queue', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+      } else {
+        // Emit to server
+        socketRef.current.emit('encrypted-message', encryptedPayload);
+      }
     } catch (err) {
       console.error('Failed to encrypt and send message:', err);
     }
@@ -1297,7 +2097,7 @@ export default function App() {
     });
   };
 
-  // WhatsApp-style Delete Message Handler
+  // Haven-style Delete Message Handler
   const handleDeleteMessage = (messageId: string, deleteForEveryone: boolean) => {
     if (!config || !socketRef.current) return;
     if (deleteForEveryone) {
@@ -1332,7 +2132,7 @@ export default function App() {
     }
   };
 
-  // WhatsApp-style Edit Message Handler
+  // Haven-style Edit Message Handler
   const handleEditMessage = async (messageId: string, newText: string) => {
     if (!config || !cryptoKey || !socketRef.current || !newText.trim()) return;
     try {
@@ -1483,7 +2283,9 @@ export default function App() {
       setIsSquadMuted(false);
       setIsSquadVideoOff(callType === 'audio');
       setIsSquadScreenSharing(false);
+      setIsSquadCallMinimized(false);
       setIsSquadCallModalOpen(true);
+      squadCallStartTimeRef.current = Date.now();
 
       // Notify other members in space so they receive incoming call ring
       socketRef.current.emit('call-request', {
@@ -1531,6 +2333,19 @@ export default function App() {
   const handleLeaveSquadCall = () => {
     if (squadCallRef.current) {
       squadCallRef.current.leaveCall();
+    }
+    if (squadCallStartTimeRef.current) {
+      const duration = Math.max(1, Math.round((Date.now() - squadCallStartTimeRef.current) / 1000));
+      squadCallStartTimeRef.current = null;
+      logCallHistory({
+        callType: activeSquadCall?.callType || 'video',
+        status: 'completed',
+        duration,
+        callerId: currentUserId,
+        callerName: config?.userName || 'You',
+        isSquadCall: true,
+        groupName: config?.groupName,
+      });
     }
     setSquadLocalStream(null);
     setSquadRemoteStreams(new Map());
@@ -1592,15 +2407,43 @@ export default function App() {
       return;
     }
 
+    unlockAudioContext();
+    setIsMuted(false);
+    setIsVideoOff(false);
+    setIsAudioCallMinimized(false);
+    setIsVideoCallMinimized(false);
+    setIsSquadCallMinimized(false);
     setActiveCallType(callType);
     setCallStatus('calling');
     startRingtone();
+
+    callContextRef.current = {
+      callType,
+      callerId: currentUserId,
+      callerName: config.userName,
+      startedAt: Date.now(),
+      connectedAt: null,
+      status: 'calling',
+      logged: false,
+      isSquadCall: false,
+    };
+
+    if (callRingingTimeoutRef.current) {
+      clearTimeout(callRingingTimeoutRef.current);
+    }
+    // Haven auto-timeout after 45s if partner doesn't pick up
+    callRingingTimeoutRef.current = window.setTimeout(() => {
+      if (callContextRef.current && (callContextRef.current.status === 'calling' || callContextRef.current.status === 'connecting')) {
+        handleEndCall();
+      }
+    }, 45000);
 
     const rtc = initWebRTC(callType);
     try {
       const stream = await rtc.initLocalMedia(callType);
       setLocalStream(stream);
       rtc.createPeerConnection();
+      await drainPendingSignals(rtc);
 
       socketRef.current.emit('call-request', {
         roomId: config.roomId,
@@ -1610,6 +2453,10 @@ export default function App() {
       });
     } catch (err) {
       console.error('Error starting media call:', err);
+      if (callRingingTimeoutRef.current) {
+        clearTimeout(callRingingTimeoutRef.current);
+        callRingingTimeoutRef.current = null;
+      }
       stopRingtone();
       setCallStatus('idle');
       setActiveCallType(null);
@@ -1621,9 +2468,16 @@ export default function App() {
   const handleAcceptCall = async () => {
     if (!incomingCallData || !config || !socketRef.current) return;
     stopRingtone();
+    if (callRingingTimeoutRef.current) {
+      clearTimeout(callRingingTimeoutRef.current);
+      callRingingTimeoutRef.current = null;
+    }
 
     const callType = incomingCallData.callType;
     const isSquad = incomingCallData.isSquadCall || config.spaceType === 'friends';
+    if (incomingCallData.callerSocketId) {
+      currentCallTargetSocketIdRef.current = incomingCallData.callerSocketId;
+    }
 
     if (isSquad) {
       setIncomingCallData(null);
@@ -1631,14 +2485,25 @@ export default function App() {
       return;
     }
 
+    unlockAudioContext();
+    setIsMuted(false);
+    setIsVideoOff(false);
+    setIsAudioCallMinimized(false);
+    setIsVideoCallMinimized(false);
+    setIsSquadCallMinimized(false);
     setActiveCallType(callType);
     setCallStatus('connecting');
+
+    if (callContextRef.current) {
+      callContextRef.current.status = 'connecting';
+    }
 
     const rtc = initWebRTC(callType);
     try {
       const stream = await rtc.initLocalMedia(callType);
       setLocalStream(stream);
       rtc.createPeerConnection();
+      await drainPendingSignals(rtc);
 
       socketRef.current.emit('call-accepted', {
         roomId: config.roomId,
@@ -1656,6 +2521,21 @@ export default function App() {
   // Decline Incoming Call
   const handleDeclineCall = (reason?: string) => {
     stopRingtone();
+    if (callRingingTimeoutRef.current) {
+      clearTimeout(callRingingTimeoutRef.current);
+      callRingingTimeoutRef.current = null;
+    }
+    if (callContextRef.current && !callContextRef.current.logged) {
+      callContextRef.current.logged = true;
+      logCallHistory({
+        callType: callContextRef.current.callType,
+        status: 'declined',
+        duration: 0,
+        callerId: callContextRef.current.callerId,
+        callerName: callContextRef.current.callerName,
+        isSquadCall: callContextRef.current.isSquadCall,
+      });
+    }
     if (incomingCallData && config && socketRef.current) {
       socketRef.current.emit('call-declined', {
         roomId: config.roomId,
@@ -1663,12 +2543,35 @@ export default function App() {
       });
     }
     setIncomingCallData(null);
+    currentCallTargetSocketIdRef.current = null;
   };
 
   // End Active Call
   const handleEndCall = () => {
     stopRingtone();
     playCallEnded();
+    if (callRingingTimeoutRef.current) {
+      clearTimeout(callRingingTimeoutRef.current);
+      callRingingTimeoutRef.current = null;
+    }
+    if (callContextRef.current && !callContextRef.current.logged) {
+      callContextRef.current.logged = true;
+      const isConnected = !!callContextRef.current.connectedAt;
+      const duration = isConnected
+        ? Math.max(1, Math.round((Date.now() - (callContextRef.current.connectedAt || Date.now())) / 1000))
+        : 0;
+      const status = isConnected ? 'completed' : 'missed';
+      logCallHistory({
+        callType: callContextRef.current.callType,
+        status,
+        duration,
+        callerId: callContextRef.current.callerId,
+        callerName: callContextRef.current.callerName,
+        isSquadCall: callContextRef.current.isSquadCall,
+      });
+    }
+    pendingSignalsRef.current = [];
+    currentCallTargetSocketIdRef.current = null;
     if (config && socketRef.current) {
       socketRef.current.emit('call-ended', {
         roomId: config.roomId,
@@ -1685,7 +2588,128 @@ export default function App() {
     setIsMuted(false);
     setIsVideoOff(false);
     setIsScreenSharing(false);
+    setIsAudioCallMinimized(false);
   };
+
+  // Voicemail & Offline Video Greeting Handlers
+  const handleSendVoicemail = async (voicemailData: Omit<VoicemailGreeting, 'id' | 'createdAt' | 'listened'>) => {
+    if (!config?.roomId || !socketRef.current) return;
+    const newVm: VoicemailGreeting = {
+      ...voicemailData,
+      id: `vm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      roomId: config.roomId,
+      createdAt: Date.now(),
+      listened: false,
+    };
+    socketRef.current.emit('leave-voicemail', newVm);
+    setVoicemails((prev) => {
+      if (prev.some((v) => v.id === newVm.id)) return prev;
+      return [newVm, ...prev];
+    });
+  };
+
+  const handleMarkVoicemailListened = (voicemailId: string) => {
+    if (!config?.roomId || !socketRef.current) return;
+    socketRef.current.emit('mark-voicemail-listened', { voicemailId, roomId: config.roomId });
+    setVoicemails((prev) =>
+      prev.map((v) => (v.id === voicemailId ? { ...v, listened: true } : v))
+    );
+  };
+
+  const handleDeleteVoicemail = (voicemailId: string) => {
+    if (!config?.roomId || !socketRef.current) return;
+    socketRef.current.emit('delete-voicemail', { voicemailId, roomId: config.roomId });
+    setVoicemails((prev) => prev.filter((v) => v.id !== voicemailId));
+  };
+
+  // --- Haven Status Updates & Stories Handlers ---
+  const handlePostStatus = useCallback((data: {
+    type: 'text' | 'image';
+    text?: string;
+    color?: string;
+    mediaUrl?: string;
+    caption?: string;
+  }) => {
+    if (!config) return;
+    const statusId = `status-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const timestamp = Date.now();
+    const expiresAt = timestamp + 24 * 60 * 60 * 1000;
+    const newStatus: FriendStatus = {
+      id: statusId,
+      roomId: config.roomId,
+      userId: currentUserId,
+      userName: config.userName,
+      userAvatar: config.userAvatar,
+      type: data.type,
+      text: data.text,
+      color: data.color,
+      mediaUrl: data.mediaUrl,
+      caption: data.caption,
+      timestamp,
+      expiresAt,
+      viewers: [currentUserId],
+      comments: [],
+    };
+    setStatuses((prev) => [newStatus, ...prev.filter((s) => s.id !== statusId)]);
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('status-post', { roomId: config.roomId, status: newStatus });
+    }
+  }, [config, currentUserId]);
+
+  const handleDeleteStatus = useCallback((statusId: string) => {
+    if (!config) return;
+    setStatuses((prev) => prev.filter((s) => s.id !== statusId));
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('status-delete', { roomId: config.roomId, statusId });
+    }
+  }, [config]);
+
+  const handleViewStatus = useCallback((statusId: string) => {
+    if (!config) return;
+    setStatuses((prev) =>
+      prev.map((s) => {
+        if (s.id === statusId && !s.viewers?.includes(currentUserId)) {
+          return { ...s, viewers: [...(s.viewers || []), currentUserId] };
+        }
+        return s;
+      })
+    );
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('status-view', { roomId: config.roomId, statusId, userId: currentUserId });
+    }
+  }, [config, currentUserId]);
+
+  const handleAddStatusComment = useCallback((statusId: string, commentText: string) => {
+    if (!config) return;
+    const comment: StatusComment = {
+      id: `comment-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      statusId,
+      userId: currentUserId,
+      userName: config.userName,
+      userAvatar: config.userAvatar,
+      text: commentText,
+      timestamp: Date.now(),
+    };
+    setStatuses((prev) =>
+      prev.map((s) => {
+        if (s.id === statusId) {
+          return { ...s, comments: [...(s.comments || []), comment] };
+        }
+        return s;
+      })
+    );
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('status-comment', { roomId: config.roomId, statusId, comment });
+    }
+  }, [config, currentUserId]);
+
+  // Manual ICE Restart Reconnection (for cross-country calling jitter)
+  const handleReconnectCall = useCallback(async () => {
+    if (webrtcRef.current) {
+      console.log('User triggered manual WebRTC ICE restart for international reconnection...');
+      await webrtcRef.current.restartIce();
+    }
+  }, []);
 
   // Calling Media Controls
   const handleToggleMute = () => {
@@ -1714,6 +2738,40 @@ export default function App() {
       setIsScreenSharing(sharing);
     }
   };
+
+  const handleToggleNoiseCancellation = useCallback(() => {
+    setIsNoiseCancellationActive((prev) => {
+      const next = !prev;
+      if (webrtcRef.current) {
+        webrtcRef.current.setNoiseCancellation(next).catch((err) => {
+          console.debug('Error toggling noise cancellation on WebRTC:', err);
+        });
+      }
+      if (squadCallRef.current) {
+        squadCallRef.current.setNoiseCancellation(next).catch((err) => {
+          console.debug('Error toggling noise cancellation on SquadCall:', err);
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleEchoSuppression = useCallback(() => {
+    setIsEchoSuppressionActive((prev) => {
+      const next = !prev;
+      if (webrtcRef.current) {
+        webrtcRef.current.setEchoSuppression(next).catch((err) => {
+          console.debug('Error toggling echo suppression on WebRTC:', err);
+        });
+      }
+      if (squadCallRef.current) {
+        squadCallRef.current.setEchoSuppression(next).catch((err) => {
+          console.debug('Error toggling echo suppression on SquadCall:', err);
+        });
+      }
+      return next;
+    });
+  }, []);
 
   // Mood Update
   const handleUpdateMood = (newMood: string) => {
@@ -1889,8 +2947,57 @@ export default function App() {
     }
   };
 
-  // Leave Space
+  // Switch directly to a previously saved space without losing passkey or history
+  const handleSwitchSpace = (record: SavedSpaceRecord) => {
+    if (!record?.roomId) return;
+    try {
+      // 1. Save current room messages first if any exist
+      if (config?.roomId && messages.length > 0) {
+        saveMessagesForSpace(config.roomId, messages);
+      }
+
+      // 2. Prepare new space config and persist it
+      const newConfig = spaceRecordToConfig(record);
+      recordSpaceVisit(newConfig);
+      try {
+        localStorage.setItem('haven_couple_config', JSON.stringify(newConfig));
+      } catch {
+        // ignore
+      }
+
+      // 3. Load all saved messages for target space
+      const spaceMsgs = getMessagesForSpace(record.roomId);
+      setMessages(spaceMsgs);
+
+      // 4. Disconnect existing socket room so we cleanly join the new one
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+
+      // 5. Update room state & presence
+      setConfig(newConfig);
+      setSavedSpaces(getSavedSpaces());
+      setIsPartnerOnline(false);
+      setRoomMembers([]);
+      setPartner(null);
+      setIsSpacesManagerOpen(false);
+      setSpaceFullError(null);
+      playMessageChime(false);
+    } catch (e) {
+      console.error('Failed to switch space:', e);
+    }
+  };
+
+  // Leave Space without forgetting it from the saved registry
   const handleLeaveSpace = () => {
+    // Current space remains preserved in the saved spaces registry so you can return anytime
+    if (config) {
+      try {
+        recordSpaceVisit(config);
+      } catch {
+        // ignore
+      }
+    }
     localStorage.removeItem('haven_couple_config');
     setConfig(null);
     if (socketRef.current) {
@@ -1936,26 +3043,95 @@ export default function App() {
     setIsSinglesLoungeOpen(false);
   };
 
-  // If no space is configured yet, render Setup Modal & Singles Lounge
-  if (!config) {
+  // If no space is configured yet or user requested landing, render LandingPage, AuthModal, SetupSpaceModal
+  if (!config || showLanding) {
     return (
       <>
-        <SetupSpaceModal
-          initialError={spaceFullError}
-          onOpenSingles={() => setIsSinglesLoungeOpen(true)}
-          onComplete={(newConfig) => {
-            setConfig(newConfig);
-            setSpaceFullError(null);
+        <OfflineIndicator />
+        <LandingPage
+          authUser={authUser}
+          pendingInvites={pendingInvites}
+          onOpenAuth={(mode) => {
+            setAuthModalMode(mode);
+            setAuthModalReason(undefined);
+            setIsAuthModalOpen(true);
           }}
+          onOpenSpaceChooser={() => {
+            if (!authUser) {
+              setAuthModalMode('login');
+              setAuthModalReason('Please sign in or register to choose your space destination.');
+              setIsAuthModalOpen(true);
+            } else {
+              setShowSpaceChooser(true);
+            }
+          }}
+          onEnterSpouseChat={() => {
+            if (!authUser) {
+              setAuthModalMode('login');
+              setAuthModalReason('Please sign in or register to step into your private spouse chat.');
+              setIsAuthModalOpen(true);
+            } else {
+              handleSelectDestination('spouse');
+            }
+          }}
+          onOpenSetup={(mode, type) => {
+            setSetupInitialMode(mode);
+            setSetupInitialType(type || 'couple');
+            setIsSetupSpaceOpen(true);
+          }}
+          onAcceptInvite={handleAcceptInvite}
+          onLogout={handleLogout}
         />
+
+        <SpaceChooserModal
+          isOpen={showSpaceChooser}
+          onClose={() => setShowSpaceChooser(false)}
+          authUser={authUser}
+          onSelectDestination={handleSelectDestination}
+        />
+
+        {isSetupSpaceOpen && (
+          <SetupSpaceModal
+            initialError={spaceFullError}
+            initialMode={setupInitialMode}
+            initialSpaceType={setupInitialType}
+            onClose={() => setIsSetupSpaceOpen(false)}
+            onOpenAuth={(mode) => {
+              setAuthModalMode(mode);
+              setIsAuthModalOpen(true);
+            }}
+            onOpenSingles={() => setIsSinglesLoungeOpen(true)}
+            onComplete={(newConfig) => {
+              setConfig(newConfig);
+              setSpaceFullError(null);
+              setIsSetupSpaceOpen(false);
+              setShowLanding(false);
+            }}
+          />
+        )}
+
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => {
+            setIsAuthModalOpen(false);
+            setAuthModalReason(undefined);
+          }}
+          onSuccess={handleAuthSuccess}
+          initialMode={authModalMode}
+          reasonMessage={authModalReason}
+        />
+
         {isSinglesLoungeOpen && (
           <SinglesLoungeModal
             isOpen={isSinglesLoungeOpen}
             onClose={() => setIsSinglesLoungeOpen(false)}
             currentUserId={currentUserId}
-            currentUserName=""
-            currentUserAvatar=""
-            onStartOneOnOneSpace={handleStartOneOnOneSpace}
+            currentUserName={authUser?.name || ''}
+            currentUserAvatar={authUser?.avatar || ''}
+            onStartOneOnOneSpace={(roomId, passkey, partnerProfile) => {
+              handleStartOneOnOneSpace(roomId, passkey, partnerProfile);
+              setShowLanding(false);
+            }}
           />
         )}
       </>
@@ -1963,7 +3139,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex flex-col h-screen w-full ${colorMode === 'dark' ? 'bg-slate-950 text-slate-100 dark' : `${currentTheme.background} text-slate-900`} overflow-hidden font-sans transition-colors duration-500 ${isScreenRumbling ? 'animate-screen-rumble' : ''}`}>
+    <div className={`flex flex-col h-[100dvh] max-h-[100dvh] w-full ${colorMode === 'dark' ? 'bg-slate-950 text-slate-100 dark' : `${currentTheme.canvasBg || 'bg-rose-50/30'} text-slate-900`} overflow-hidden font-sans transition-colors duration-500 ${isScreenRumbling ? 'animate-screen-rumble' : ''}`}>
       {/* Floating Love Reaction Overlay */}
       <LoveBurstOverlay
         bursts={loveBursts}
@@ -1971,7 +3147,8 @@ export default function App() {
       />
 
       {/* Top Header Bar */}
-      <TopBar
+      {!isChatFullscreen && (
+        <TopBar
         partner={partner}
         partnerName={config.partnerName}
         partnerAvatar={config.partnerAvatar}
@@ -1989,6 +3166,7 @@ export default function App() {
         onOpenAllFeatures={() => setIsSpaceFeaturesOpen(true)}
         onOpenSecurity={() => setShowSecurityModal(true)}
         onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenActivityLog={() => setShowActivityLogModal(true)}
         onStartAudioCall={() => handleStartCall('audio')}
         onStartVideoCall={() => handleStartCall('video')}
         onSendLovePing={handleSendLovePing}
@@ -2001,7 +3179,22 @@ export default function App() {
         onOpenTouchPulse={() => setIsTouchPulseOpen(true)}
         onOpenBucketList={() => setIsBucketListOpen(true)}
         onOpenSleepSanctuary={() => setIsSleepSanctuaryOpen(true)}
-        onOpenGamesLounge={() => setIsGamesLoungeOpen(true)}
+        onOpenGamesLounge={() => {
+          setGamesLoungeTab('connect_hearts');
+          setIsGamesLoungeOpen(true);
+        }}
+        onOpenDraughts={() => {
+          setGamesLoungeTab('draughts');
+          setIsGamesLoungeOpen(true);
+        }}
+        onOpenLudo={() => {
+          setGamesLoungeTab('ludo');
+          setIsGamesLoungeOpen(true);
+        }}
+        onOpenCandyCrush={() => {
+          setGamesLoungeTab('candy_crush');
+          setIsGamesLoungeOpen(true);
+        }}
         onOpenChess={() => setIsChessModalOpen(true)}
         onOpenPolaroidVault={() => setIsPolaroidVaultOpen(true)}
         onOpenHorizon={() => setIsHorizonOpen(true)}
@@ -2015,11 +3208,32 @@ export default function App() {
         isMusicPlaying={syncMusicState.isPlaying}
         currentMusicTitle={syncMusicState.customTrack?.title || MUSIC_CATALOG.find((t) => t.id === syncMusicState.trackId)?.title}
         onOpenWallpaperPicker={() => setShowWallpaperPickerModal(true)}
-        onOpenSinglesLounge={() => setIsSinglesLoungeOpen(true)}
+        onOpenSinglesLounge={(config.spaceType as any) === 'single' ? () => setIsSinglesLoungeOpen(true) : undefined}
+        onOpenStatus={() => setIsStatusModalOpen(true)}
+        hasUnreadStatus={hasUnreadStatus}
+        onOpenSpacesManager={() => setShowSpaceChooser(true)}
+        onOpenDiagnostics={() => setIsDiagnosticsModalOpen(true)}
+        onInviteSpouse={() => setIsInviteSpouseOpen(true)}
+        onExitToLanding={() => setShowLanding(true)}
+        onOpenQRPairing={() => setIsQRPairingOpen(true)}
+        onOpenVoicemail={() => {
+          setVoicemailModalMode('inbox');
+          setIsVoicemailModalOpen(true);
+        }}
+        unreadVoicemailCount={voicemails.filter((v) => !v.listened && v.senderId !== currentUserId).length}
+        pendingInviteCount={pendingInvites.filter((i) => i.status === 'pending' && i.roomId !== config.roomId).length}
+        pendingInvitePartnerName={pendingInvites.find((i) => i.status === 'pending' && i.roomId !== config.roomId)?.senderName}
+        onAcceptPendingInvite={() => {
+          const inv = pendingInvites.find((i) => i.status === 'pending' && i.roomId !== config.roomId) || pendingInvites[0];
+          if (inv) handleAcceptInvite(inv);
+        }}
+        isChatFullscreen={isChatFullscreen}
+        onToggleChatFullscreen={handleToggleChatFullscreen}
       />
+      )}
 
       {/* Main Encrypted Chat Workspace */}
-      <main className="flex-1 flex overflow-hidden relative">
+      <main className={`flex-1 flex flex-col w-full min-h-0 overflow-hidden relative ${isChatFullscreen ? 'h-full' : ''}`}>
         <ChatArea
           messages={messages}
           currentUserId={currentUserId}
@@ -2052,8 +3266,46 @@ export default function App() {
           onDeleteMessage={handleDeleteMessage}
           onEditMessage={handleEditMessage}
           onOpenWatchTogether={() => setIsWatchTogetherOpen(true)}
+          pendingSpouseInvite={
+            pendingInvites.find((i) => i.status === 'pending' && i.roomId !== config.roomId) ||
+            (pendingInvites.length > 0 && pendingInvites[0].status === 'pending' ? pendingInvites[0] : null)
+          }
+          onAcceptSpouseInvite={handleAcceptInvite}
+          onDismissSpouseInvite={(id) => setPendingInvites((prev) => prev.filter((i) => i.id !== id))}
+          onOpenInviteSpouse={() => setIsInviteSpouseOpen(true)}
+          onOpenQRPairing={() => setIsQRPairingOpen(true)}
+          onOpenThumbKiss={() => setIsTouchPulseOpen(true)}
+          ambientHeartbeat={isPartnerOnline}
+          isChatFullscreen={isChatFullscreen}
+          onToggleChatFullscreen={handleToggleChatFullscreen}
+          onStartAudioCall={() => handleStartCall('audio')}
+          onStartVideoCall={() => handleStartCall('video')}
+          onOpenStatus={() => setIsStatusModalOpen(true)}
+          hasUnreadStatus={hasUnreadStatus}
         />
       </main>
+
+      {/* Haven Mobile Bottom Navigation Bar (Phone Only) */}
+      {!isChatFullscreen && (
+        <HavenBottomNav
+          spaceType={config.spaceType}
+          isDark={colorMode === 'dark'}
+          onStartAudioCall={() => handleStartCall('audio')}
+          onStartVideoCall={() => handleStartCall('video')}
+          onOpenWatchTogether={() => setIsWatchTogetherOpen(true)}
+          onOpenMusicLounge={() => setIsMusicLoungeOpen(true)}
+          onOpenVoicemail={() => {
+            setVoicemailModalMode('inbox');
+            setIsVoicemailModalOpen(true);
+          }}
+          isMusicPlaying={syncMusicState.isPlaying}
+          currentMusicTitle={syncMusicState.customTrack?.title || MUSIC_CATALOG.find((t) => t.id === syncMusicState.trackId)?.title}
+          onOpenSinglesLounge={(config.spaceType as any) === 'single' ? () => setIsSinglesLoungeOpen(true) : undefined}
+          onOpenStatus={() => setIsStatusModalOpen(true)}
+          hasUnreadStatus={hasUnreadStatus}
+          onOpenFeatures={() => setIsSpaceFeaturesOpen(true)}
+        />
+      )}
 
       {/* Live Love Canvas Modal */}
       <LiveCanvasModal
@@ -2178,6 +3430,7 @@ export default function App() {
       <CoupleGamesModal
         isOpen={isGamesLoungeOpen}
         onClose={() => setIsGamesLoungeOpen(false)}
+        initialTab={gamesLoungeTab}
         currentUserId={currentUserId}
         currentUserName={config.userName}
         currentUserAvatar={config.userAvatar}
@@ -2185,6 +3438,14 @@ export default function App() {
         partnerName={config.partnerName}
         incomingGameData={incomingGameAction}
         onOpenChessModal={() => setIsChessModalOpen(true)}
+        activeCallType={activeCallType}
+        callStatus={callStatus}
+        isMuted={isMuted}
+        localStream={localStream}
+        remoteStream={remoteStream}
+        onStartCall={handleStartCall}
+        onEndCall={handleEndCall}
+        onToggleMute={handleToggleMute}
         onBroadcastGameAction={(gameType, actionData) => {
           if (config && socketRef.current) {
             socketRef.current.emit('game-action', {
@@ -2341,7 +3602,7 @@ export default function App() {
       )}
 
       {/* Active Audio Call Screen */}
-      {activeCallType === 'audio' && !isWatchTogetherOpen && !isChessModalOpen && (
+      {activeCallType === 'audio' && !isWatchTogetherOpen && !isChessModalOpen && !isGamesLoungeOpen && (
         <AudioCallModal
           partnerName={config.partnerName}
           partnerAvatar={config.partnerAvatar}
@@ -2356,11 +3617,29 @@ export default function App() {
           onSendLoveBurst={handleSendLoveBurst}
           localStream={localStream}
           remoteStream={remoteStream}
+          onReconnectCall={handleReconnectCall}
+          isMinimized={isAudioCallMinimized}
+          onToggleMinimize={() => setIsAudioCallMinimized((prev) => !prev)}
+          onOpenGames={() => setIsGamesLoungeOpen(true)}
+          isNoiseCancellationActive={isNoiseCancellationActive}
+          onToggleNoiseCancellation={handleToggleNoiseCancellation}
+          isEchoSuppressionActive={isEchoSuppressionActive}
+          onToggleEchoSuppression={handleToggleEchoSuppression}
+          getNetworkStats={() =>
+            webrtcRef.current
+              ? webrtcRef.current.getNetworkStats()
+              : Promise.resolve({
+                  rttMs: null,
+                  packetLossPercent: 0,
+                  jitterMs: null,
+                  quality: 'measuring' as const,
+                })
+          }
         />
       )}
 
-      {/* Active HD Video Call Screen */}
-      {activeCallType === 'video' && !isWatchTogetherOpen && !isChessModalOpen && (
+      {/* Active HD Video Call Screen with Picture-in-Picture (PiP) Floating Overlay */}
+      {activeCallType === 'video' && (
         <VideoCallModal
           partnerName={config.partnerName}
           partnerAvatar={config.partnerAvatar}
@@ -2376,6 +3655,23 @@ export default function App() {
           onSendLoveBurst={handleSendLoveBurst}
           localStream={localStream}
           remoteStream={remoteStream}
+          onReconnectCall={handleReconnectCall}
+          isMinimized={isVideoCallMinimized || isWatchTogetherOpen || isChessModalOpen || isGamesLoungeOpen || isPolaroidVaultOpen}
+          onToggleMinimize={() => setIsVideoCallMinimized((prev) => !prev)}
+          isNoiseCancellationActive={isNoiseCancellationActive}
+          onToggleNoiseCancellation={handleToggleNoiseCancellation}
+          isEchoSuppressionActive={isEchoSuppressionActive}
+          onToggleEchoSuppression={handleToggleEchoSuppression}
+          getNetworkStats={() =>
+            webrtcRef.current
+              ? webrtcRef.current.getNetworkStats()
+              : Promise.resolve({
+                  rttMs: null,
+                  packetLossPercent: 0,
+                  jitterMs: null,
+                  quality: 'measuring' as const,
+                })
+          }
         />
       )}
 
@@ -2405,6 +3701,12 @@ export default function App() {
           onToggleScreenShare={handleToggleSquadScreenShare}
           onLeaveCall={handleLeaveSquadCall}
           onSendReaction={(emoji) => handleSendLoveBurst(emoji)}
+          isNoiseCancellationActive={isNoiseCancellationActive}
+          onToggleNoiseCancellation={handleToggleNoiseCancellation}
+          isEchoSuppressionActive={isEchoSuppressionActive}
+          onToggleEchoSuppression={handleToggleEchoSuppression}
+          isMinimized={isSquadCallMinimized}
+          onToggleMinimize={() => setIsSquadCallMinimized((prev) => !prev)}
         />
       )}
 
@@ -2451,6 +3753,20 @@ export default function App() {
         }}
         onWipeHistory={handleWipeHistory}
         onLeaveSpace={handleLeaveSpace}
+        onOpenSpacesManager={() => setIsSpacesManagerOpen(true)}
+      />
+
+      {/* Spaces Switcher & Multi-Space Registry Modal */}
+      <SpacesManagerModal
+        isOpen={isSpacesManagerOpen}
+        onClose={() => setIsSpacesManagerOpen(false)}
+        currentRoomId={config.roomId}
+        onSwitchSpace={handleSwitchSpace}
+        onOpenNewSpaceSetup={() => {
+          setIsSpacesManagerOpen(false);
+          // Set config to null so the user can easily create or join another space
+          setConfig(null);
+        }}
       />
 
       {/* Atmosphere Theme Picker Modal */}
@@ -2462,7 +3778,7 @@ export default function App() {
         onOpenWallpaperPicker={() => setShowWallpaperPickerModal(true)}
       />
 
-      {/* WhatsApp Chat Wallpaper Picker Modal */}
+      {/* Haven Chat Wallpaper Picker Modal */}
       <WallpaperPickerModal
         isOpen={showWallpaperPickerModal}
         onClose={() => setShowWallpaperPickerModal(false)}
@@ -2529,11 +3845,67 @@ export default function App() {
         onOpenThemePicker={() => setShowThemePickerModal(true)}
         onOpenVibeSelector={() => setShowVibeSelectorModal(true)}
         onTriggerLoveBuzz={handleTriggerLoveBuzz}
-        onOpenSinglesLounge={() => setIsSinglesLoungeOpen(true)}
+        onOpenSinglesLounge={(config.spaceType as any) === 'single' ? () => setIsSinglesLoungeOpen(true) : undefined}
+        onOpenStatus={() => setIsStatusModalOpen(true)}
+        hasUnreadStatus={hasUnreadStatus}
+        onOpenSecurity={() => setShowSecurityModal(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenActivityLog={() => setShowActivityLogModal(true)}
+        onOpenQRPairing={() => setIsQRPairingOpen(true)}
+        onOpenInstallModal={() => setIsInstallModalOpen(true)}
       />
 
-      {/* Singles Lounge & Spark Hub Modal */}
-      {isSinglesLoungeOpen && (
+      {/* Install Phone App & Standalone APK Modal */}
+      <PWAInstallModal
+        isOpen={isInstallModalOpen}
+        onClose={() => setIsInstallModalOpen(false)}
+      />
+
+      {/* Instant QR Code Pairing Modal */}
+      <QRCodePairingModal
+        isOpen={isQRPairingOpen}
+        onClose={() => setIsQRPairingOpen(false)}
+        currentSpaceConfig={config}
+        onJoinFromQR={(newRoomId, newKey, newSpaceType, newName) => {
+          if (!config) return;
+          const updated: CoupleSpaceConfig = {
+            ...config,
+            roomId: newRoomId,
+            passkey: newKey,
+            spaceType: newSpaceType || config.spaceType,
+            groupName: newName || config.groupName,
+          };
+          localStorage.setItem('haven_couple_config', JSON.stringify(updated));
+          setConfig(updated);
+          setIsQRPairingOpen(false);
+        }}
+      />
+
+      {/* Haven Status Updates & Stories Modal (Haven-style 24h stories & commenting) */}
+      {isStatusModalOpen && (
+        <HavenStatusModal
+          isOpen={isStatusModalOpen}
+          onClose={() => {
+            setIsStatusModalOpen(false);
+            setInitialViewStatusId(null);
+          }}
+          currentUser={{
+            id: currentUserId,
+            name: config.userName,
+            avatar: config.userAvatar,
+          }}
+          statuses={statuses}
+          onPostStatus={handlePostStatus}
+          onDeleteStatus={handleDeleteStatus}
+          onViewStatus={handleViewStatus}
+          onAddComment={handleAddStatusComment}
+          initialViewStatusId={initialViewStatusId}
+          isDark={colorMode === 'dark'}
+        />
+      )}
+
+      {/* Singles Lounge & Spark Hub Modal (Only accessible in explicit single space, never under friends or couple) */}
+      {isSinglesLoungeOpen && (config.spaceType as any) === 'single' && (
         <SinglesLoungeModal
           isOpen={isSinglesLoungeOpen}
           onClose={() => setIsSinglesLoungeOpen(false)}
@@ -2543,6 +3915,161 @@ export default function App() {
           onStartOneOnOneSpace={handleStartOneOnOneSpace}
         />
       )}
+
+      {/* Activity & Security Audit Log Modal */}
+      <ActivityLogModal
+        isOpen={showActivityLogModal}
+        onClose={() => setShowActivityLogModal(false)}
+        isDark={colorMode === 'dark'}
+      />
+
+      {/* Standalone Audio & Video Call Diagnostics Modal */}
+      <CallDiagnosticsModal
+        isOpen={isDiagnosticsModalOpen}
+        onClose={() => setIsDiagnosticsModalOpen(false)}
+        callType="video"
+        onAutoFixAndReconnect={async () => {
+          unlockAudioContext();
+          if (webrtcRef.current) {
+            await webrtcRef.current.restartIce();
+          }
+        }}
+      />
+
+      {/* Invite Spouse / Partner Modal */}
+      {isInviteSpouseOpen && (
+        <InviteSpouseModal
+          isOpen={isInviteSpouseOpen}
+          onClose={() => setIsInviteSpouseOpen(false)}
+          roomId={config.roomId}
+          passkey={config.passkey}
+          spaceType={config.spaceType}
+          spaceName={config.groupName || (config.spaceType === 'couple' ? `${config.userName} & ${config.partnerName}` : undefined)}
+          senderName={config.userName}
+          senderEmail={authUser?.email}
+          existingPartnerName={config.partnerName}
+          hasExistingPartner={config.spaceType === 'couple' && (Boolean(partner) || config.isVerified)}
+        />
+      )}
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setAuthModalReason(undefined);
+        }}
+        onSuccess={handleAuthSuccess}
+        initialMode={authModalMode}
+        reasonMessage={authModalReason}
+      />
+
+      {/* Space Destination Chooser Modal */}
+      <SpaceChooserModal
+        isOpen={showSpaceChooser}
+        onClose={() => setShowSpaceChooser(false)}
+        authUser={authUser}
+        onSelectDestination={handleSelectDestination}
+      />
+
+      {/* Partner Accepted Invitation Banner Notification */}
+      {partnerAcceptedToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] px-4 animate-in slide-in-from-top-4 duration-300 pointer-events-auto">
+          <div className="bg-emerald-600 text-white p-3.5 sm:p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-3 border-2 border-emerald-400">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                <Heart className="w-5 h-5 fill-white text-white animate-pulse" />
+              </div>
+              <div className="min-w-0">
+                <h4 className="font-bold text-sm truncate">Partner Connected! 🎉</h4>
+                <p className="text-xs text-emerald-100 truncate">
+                  {partnerAcceptedToast.name} accepted your invitation! You are now chatting live.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setPartnerAcceptedToast(null)}
+              className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10 shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Offline Video & Voice Voicemail Greeting Modal */}
+      {isVoicemailModalOpen && (
+        <VoicemailModal
+          isOpen={isVoicemailModalOpen}
+          onClose={() => setIsVoicemailModalOpen(false)}
+          roomId={config.roomId}
+          currentUserId={currentUserId}
+          currentUserName={config.userName}
+          currentUserAvatar={config.userAvatar}
+          partnerName={config.partnerName}
+          partnerAvatar={config.partnerAvatar}
+          voicemails={voicemails}
+          onSendVoicemail={handleSendVoicemail}
+          onMarkListened={handleMarkVoicemailListened}
+          onDeleteVoicemail={handleDeleteVoicemail}
+          onInitiateCall={(type) => handleStartCall(type)}
+          initialMode={voicemailModalMode}
+          missedCallType={missedVoicemailCallType}
+        />
+      )}
+
+      {/* Live Incoming Partner Sanctuary Invitation Floating Banner */}
+      {liveIncomingInviteToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 max-w-lg w-[94%] px-2 animate-in slide-in-from-top-4 duration-300 pointer-events-auto">
+          <div className="bg-gradient-to-r from-rose-950 via-pink-950 to-slate-900 text-white p-4 rounded-3xl shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-2 border-rose-500 shadow-rose-500/30">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-2xl bg-rose-500/20 border border-rose-400 flex items-center justify-center shrink-0">
+                <Heart className="w-6 h-6 fill-rose-500 text-rose-500 animate-bounce" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-rose-300 uppercase tracking-wider">
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
+                  </span>
+                  <span>Partner Invitation Received 💕</span>
+                </div>
+                <h4 className="font-bold text-sm text-white truncate">
+                  {liveIncomingInviteToast.senderName} invited you to connect!
+                </h4>
+                <p className="text-xs text-rose-200/80 truncate">
+                  Space: "{liveIncomingInviteToast.spaceName}"
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                id="btn-toast-accept-invite"
+                onClick={() => {
+                  handleAcceptInvite(liveIncomingInviteToast);
+                  setLiveIncomingInviteToast(null);
+                }}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 text-white text-xs font-bold shadow-lg hover:opacity-95 active:scale-95 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Heart className="w-3.5 h-3.5 fill-white" />
+                <span>Accept & Enter</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLiveIncomingInviteToast(null)}
+                className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs transition cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Offline Status Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }

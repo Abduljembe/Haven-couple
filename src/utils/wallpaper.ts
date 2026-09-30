@@ -1,4 +1,4 @@
-// WhatsApp-Style Chat Backgrounds & Interactive Wallpaper Engine
+// Haven-Style Chat Backgrounds & Interactive Wallpaper Engine
 
 export type PatternType = 'whatsapp-classic' | 'whatsapp-romantic' | 'celestial' | 'botanical' | 'geometric' | 'none';
 export type ParticleType = 'hearts' | 'sparks' | 'stars' | 'bubbles';
@@ -19,7 +19,7 @@ export interface WallpaperConfig {
 
 export interface WallpaperSettings {
   selectedId: string;
-  doodleOpacity: number; // 0.0 to 1.0 (WhatsApp dimming/intensity)
+  doodleOpacity: number; // 0.0 to 1.0 (Haven dimming/intensity)
   interactiveParticles: boolean;
   particleType: ParticleType;
   dimming: number; // 0.0 to 0.7
@@ -27,7 +27,7 @@ export interface WallpaperSettings {
   customBgColor?: string | null;
 }
 
-// WhatsApp Authentic Classic Doodle SVG (crisp 260x260 seamless repeat pattern)
+// Haven Authentic Classic Doodle SVG (crisp 260x260 seamless repeat pattern)
 export const WHATSAPP_CLASSIC_SVG = `
 <svg xmlns="http://www.w3.org/2000/svg" width="260" height="260" viewBox="0 0 260 260">
   <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -125,7 +125,7 @@ export const WHATSAPP_CLASSIC_SVG = `
 </svg>
 `;
 
-// WhatsApp Romantic / Couple Edition SVG
+// Haven Romantic / Couple Edition SVG
 export const WHATSAPP_ROMANTIC_SVG = `
 <svg xmlns="http://www.w3.org/2000/svg" width="260" height="260" viewBox="0 0 260 260">
   <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -330,32 +330,32 @@ export const GEOMETRIC_SVG = `
 </svg>
 `;
 
-// Pre-defined Wallpapers matching WhatsApp & Premium Aesthetics
+// Pre-defined Wallpapers matching Haven & Premium Aesthetics
 export const WALLPAPER_CATALOG: WallpaperConfig[] = [
   {
-    id: 'whatsapp-classic',
-    name: 'WhatsApp Classic',
-    category: 'whatsapp',
-    bgColor: '#EFEAE2', // WhatsApp official classic beige
-    patternType: 'whatsapp-classic',
-    doodleColor: '#000000',
-    defaultOpacity: 0.28,
-    isDark: false,
-    tagline: 'The timeless, warm WhatsApp chat doodle you know & love',
-    previewBg: '#EFEAE2',
-    accentBubble: 'bg-[#005c4b] text-white',
-  },
-  {
     id: 'whatsapp-dark',
-    name: 'WhatsApp Midnight',
+    name: 'Haven Dark (Official)',
     category: 'dark',
-    bgColor: '#0B141A', // WhatsApp official dark theme background
+    bgColor: '#0B141A', // Haven official dark theme background
     patternType: 'whatsapp-classic',
     doodleColor: '#8696a0',
     defaultOpacity: 0.16,
     isDark: true,
-    tagline: 'Official WhatsApp dark mode with luminous muted outlines',
+    tagline: 'Official Haven dark mode with luminous muted outlines',
     previewBg: '#0B141A',
+    accentBubble: 'bg-[#005c4b] text-white',
+  },
+  {
+    id: 'whatsapp-classic',
+    name: 'Haven Classic',
+    category: 'whatsapp',
+    bgColor: '#EFEAE2', // Haven official classic beige
+    patternType: 'whatsapp-classic',
+    doodleColor: '#000000',
+    defaultOpacity: 0.28,
+    isDark: false,
+    tagline: 'The timeless, warm Haven chat doodle you know & love',
+    previewBg: '#EFEAE2',
     accentBubble: 'bg-[#005c4b] text-white',
   },
   {
@@ -480,10 +480,10 @@ export const WALLPAPER_CATALOG: WallpaperConfig[] = [
 const STORAGE_KEY_WALLPAPER = 'haven_chat_wallpaper_settings';
 
 export const DEFAULT_WALLPAPER_SETTINGS: WallpaperSettings = {
-  selectedId: 'whatsapp-classic',
-  doodleOpacity: 0.28,
-  interactiveParticles: true,
-  particleType: 'hearts',
+  selectedId: 'whatsapp-dark',
+  doodleOpacity: 0.16,
+  interactiveParticles: false,
+  particleType: 'sparks',
   dimming: 0,
   customImageUrl: null,
   customBgColor: null,

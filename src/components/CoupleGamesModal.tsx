@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Gamepad2,
   X,
@@ -20,9 +20,31 @@ import {
   ShieldAlert,
   Dices,
   Swords,
+  Candy,
+  Grid,
+  Phone,
+  PhoneOff,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  ChevronDown,
+  ChevronUp,
+  Radio,
+  Anchor,
+  Wine,
+  Box,
 } from 'lucide-react';
-import { UserProfile, GameType } from '../types';
+import { UserProfile, GameType, CallStatus } from '../types';
 import confetti from 'canvas-confetti';
+import { DraughtsGame } from './games/DraughtsGame';
+import { LudoGame } from './games/LudoGame';
+import { CandyCrushGame } from './games/CandyCrushGame';
+import { TruthOrDareGame } from './games/TruthOrDareGame';
+import { BattleshipGame } from './games/BattleshipGame';
+import { DotsAndBoxesGame } from './games/DotsAndBoxesGame';
+import { DeepCardsGame } from './games/DeepCardsGame';
+import { attachStreamToAudioContext, unlockAudioContext } from '../utils/sounds';
 
 interface CoupleGamesModalProps {
   isOpen: boolean;
@@ -35,6 +57,16 @@ interface CoupleGamesModalProps {
   onBroadcastGameAction: (gameType: GameType, actionData: any) => void;
   incomingGameData?: { gameType: GameType; actionData: any; senderId: string } | null;
   onOpenChessModal?: () => void;
+  initialTab?: GameType;
+  // Audio Call props
+  activeCallType?: 'audio' | 'video' | null;
+  callStatus?: CallStatus;
+  isMuted?: boolean;
+  localStream?: MediaStream | null;
+  remoteStream?: MediaStream | null;
+  onStartCall?: (type: 'audio' | 'video') => void;
+  onEndCall?: () => void;
+  onToggleMute?: () => void;
 }
 
 const THIS_OR_THAT_PRESETS: { a: { text: string; emoji: string }; b: { text: string; emoji: string } }[] = [
@@ -67,25 +99,6 @@ const MOST_LIKELY_PRESETS: string[] = [
   "Who sends more memes and cute reels throughout the day?",
 ];
 
-const TRUTH_OR_DARE_PRESETS = {
-  truths: [
-    "What was the exact moment you realized you had genuine feelings for me?",
-    "What is your favorite romantic memory of us so far?",
-    "If you could relive one day from our relationship, which one would it be?",
-    "What is one cute habit of mine that secretly melts your heart?",
-    "What is something you dream about us doing together in the future?",
-    "What song instantly reminds you of me whenever you hear it?",
-  ],
-  dares: [
-    "Send a 10-second voice note telling me what you love most about me right now.",
-    "Give me the sweetest compliment you haven't said in a while.",
-    "Promise me a personalized romantic coupon (e.g. 20 min massage, favorite dinner cooked).",
-    "Send a selfie making the cutest face you can make.",
-    "Whisper your favorite nickname for me into the voice chat.",
-    "Draw a mini love doodle on the Live Canvas right now.",
-  ],
-};
-
 type HeartTacCell = 'P1' | 'P2' | null;
 
 export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
@@ -99,8 +112,137 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
   onBroadcastGameAction,
   incomingGameData,
   onOpenChessModal,
+  initialTab,
+  activeCallType,
+  callStatus = 'idle',
+  isMuted = false,
+  localStream,
+  remoteStream,
+  onStartCall,
+  onEndCall,
+  onToggleMute,
 }) => {
-  const [activeTab, setActiveTab] = useState<GameType>('connect_hearts');
+  const [activeTab, setActiveTab] = useState<GameType>(initialTab || 'connect_hearts');
+
+  // In-Game Audio Call States
+  const [callDuration, setCallDuration] = useState(0);
+  const [isPartnerSpeaking, setIsPartnerSpeaking] = useState(false);
+  const [isCallHudMinimized, setIsCallHudMinimized] = useState(false);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const isCallActive =
+    (callStatus === 'connected' || callStatus === 'calling' || callStatus === 'connecting') &&
+    activeCallType === 'audio';
+
+  // Call duration counter
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (callStatus === 'connected' && activeCallType === 'audio') {
+      interval = setInterval(() => {
+        setCallDuration((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setCallDuration(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [callStatus, activeCallType]);
+
+  // Safely play remote audio stream
+  const attemptPlayAudio = useCallback(async () => {
+    unlockAudioContext();
+    if (!remoteAudioRef.current) return;
+    try {
+      await remoteAudioRef.current.play();
+    } catch (err) {
+      console.warn('Game audio call autoplay lock:', err);
+    }
+  }, []);
+
+  // WebRTC remote audio attachment + VAD (Voice Activity Detection)
+  useEffect(() => {
+    if (!remoteStream || !isCallActive) {
+      setIsPartnerSpeaking(false);
+      return;
+    }
+
+    const cleanupAudio = attachStreamToAudioContext(remoteStream);
+
+    if (remoteAudioRef.current) {
+      remoteStream.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+        track.onunmute = () => attemptPlayAudio();
+      });
+      if (remoteAudioRef.current.srcObject !== remoteStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+      }
+      attemptPlayAudio();
+    }
+
+    let audioContext: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let animationFrameId: number;
+
+    try {
+      const audioTrack = remoteStream.getAudioTracks()[0];
+      if (audioTrack) {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        audioContext = new AudioCtx();
+        const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const checkAudioLevel = () => {
+          if (!analyser) return;
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / dataArray.length;
+          setIsPartnerSpeaking(average > 25);
+          animationFrameId = requestAnimationFrame(checkAudioLevel);
+        };
+
+        checkAudioLevel();
+      }
+    } catch {
+      // AudioContext unavailable or blocked
+    }
+
+    return () => {
+      cleanupAudio();
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      if (audioContext && audioContext.state !== 'closed') {
+        audioContext.close().catch(() => {});
+      }
+    };
+  }, [remoteStream, isCallActive, attemptPlayAudio]);
+
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = isSpeakerMuted;
+    }
+  }, [isSpeakerMuted]);
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Scores
   const [scores, setScores] = useState({ p1: 0, p2: 0 });
@@ -123,10 +265,6 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
   const [kmPartnerGuess, setKmPartnerGuess] = useState<number | null>(null);
   const [kmScore, setKmScore] = useState<number>(0);
 
-  // --- 3. Truth or Dare State ---
-  const [todTurn, setTodTurn] = useState<'P1' | 'P2'>('P1');
-  const [todSelectedCard, setTodSelectedCard] = useState<{ type: 'truth' | 'dare'; text: string } | null>(null);
-
   // --- 4. This or That State ---
   const [totIndex, setTotIndex] = useState<number>(0);
   const [totChoices, setTotChoices] = useState<Record<string, 'A' | 'B'>>({});
@@ -139,6 +277,10 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
   useEffect(() => {
     if (!incomingGameData) return;
     const { gameType, actionData } = incomingGameData;
+
+    if (gameType === 'draughts' || gameType === 'ludo' || gameType === 'candy_crush' || gameType === 'truth_or_dare') {
+      setActiveTab(gameType);
+    }
 
     if (gameType === 'connect_hearts') {
       if (actionData.type === 'move') {
@@ -166,6 +308,10 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Stable identification of Player 1 vs Player 2 across the peer room
+  const isPlayer1 = partner?.id ? (currentUserId <= partner.id) : true;
+  const myPlayerRole: 'P1' | 'P2' = isPlayer1 ? 'P1' : 'P2';
+
   // Determine current active player turn across different game modes
   const getActiveTurn = (): 'P1' | 'P2' => {
     switch (activeTab) {
@@ -173,8 +319,6 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
         return c4Turn;
       case 'know_me':
         return kmTurn;
-      case 'truth_or_dare':
-        return todTurn;
       case 'this_or_that':
         return Object.keys(totChoices).includes(currentUserId) ? 'P2' : 'P1';
       case 'most_likely':
@@ -185,7 +329,7 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
   };
 
   const activeTurn = getActiveTurn();
-  const isMyTurn = activeTurn === 'P1';
+  const isMyTurn = activeTurn === myPlayerRole;
 
   // --- Connect Hearts Logic ---
   const checkConnect4Winner = (board: HeartTacCell[][]) => {
@@ -234,6 +378,12 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
 
   const handleDropC4 = (col: number) => {
     if (c4Winner) return;
+
+    // Strict Turn Enforcement:
+    const myC4Role = isPlayer1 ? 'P1' : 'P2';
+    if (c4Turn !== myC4Role && Boolean(partner?.name || partnerName)) {
+      return;
+    }
 
     // Find lowest empty row in column
     let targetRow = -1;
@@ -316,19 +466,6 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
     setKmTurn(kmTargetIsMe ? 'P2' : 'P1');
   };
 
-  // --- Truth or Dare Handlers ---
-  const handleDrawCard = (type: 'truth' | 'dare') => {
-    const pool = type === 'truth' ? TRUTH_OR_DARE_PRESETS.truths : TRUTH_OR_DARE_PRESETS.dares;
-    const randomText = pool[Math.floor(Math.random() * pool.length)];
-    setTodSelectedCard({ type, text: randomText });
-    confetti({ particleCount: 35, spread: 60, origin: { y: 0.6 } });
-  };
-
-  const handleNextTodTurn = () => {
-    setTodSelectedCard(null);
-    setTodTurn((prev) => (prev === 'P1' ? 'P2' : 'P1'));
-  };
-
   // --- Most Likely Handlers ---
   const handleVoteMostLikely = (chosenUserId: string) => {
     const updated = { ...mlVotes, [currentUserId]: chosenUserId };
@@ -347,54 +484,358 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
   const currentMl = MOST_LIKELY_PRESETS[mlIndex];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/65 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/65 backdrop-blur-md animate-fade-in">
       <div
         id="couple-games-modal"
-        className="w-full max-w-3xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-100 flex flex-col max-h-[92vh] transition-all"
+        className="w-full max-w-3xl bg-white rounded-none sm:rounded-3xl shadow-2xl overflow-hidden border-0 sm:border border-rose-100 flex flex-col h-[100dvh] sm:h-auto sm:max-h-[92vh] transition-all"
       >
         {/* Header */}
-        <div className="px-6 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50 to-indigo-50 border-b border-rose-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-200 flex items-center justify-center text-rose-600 shadow-xs">
-              <Gamepad2 className="w-5 h-5" />
+        <div
+          className="px-3 sm:px-6 py-3 bg-gradient-to-r from-rose-50 via-pink-50 to-indigo-50 border-b border-rose-100 flex items-center justify-between shrink-0 sticky top-0 z-20"
+          style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0.75rem))' }}
+        >
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              id="btn-games-mobile-back"
+              onClick={onClose}
+              className="p-1.5 -ml-1 text-rose-600 hover:bg-rose-100/60 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-rose-500/10 border border-rose-200 flex items-center justify-center text-rose-600 shadow-xs shrink-0">
+              <Gamepad2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <span>Couple Games Lounge</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold tracking-wide">
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
+                <span>Games for Two & Couple Lounge</span>
+                <span className="hidden xs:inline-block text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold tracking-wide shrink-0">
                   Live Synced
                 </span>
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-[11px] sm:text-xs text-slate-500 truncate">
                 Interactive real-time games with turn indicators & intimacy sparks
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Audio Call & Play Action Button (when not currently in call) */}
+            {!isCallActive && onStartCall && (
+              <button
+                type="button"
+                id="btn-game-header-start-call"
+                onClick={() => onStartCall('audio')}
+                className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xs hover:shadow transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                title="Audio Call partner to talk while playing"
+              >
+                <Phone className="w-3.5 h-3.5 animate-pulse" />
+                <span className="hidden sm:inline">Call & Play</span>
+                <span className="sm:hidden">Call</span>
+              </button>
+            )}
+
+            <button
+              onClick={onClose}
+              className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/80 transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
+
+        {/* Hidden Remote Audio Element for Crisp In-Game Voice */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
+        {/* ========================================================================= */}
+        {/* 🎙️ LIVE IN-GAME AUDIO CALL HUD */}
+        {/* ========================================================================= */}
+        {isCallActive && (
+          <div
+            id="in-game-audio-call-hud"
+            className={`border-b transition-all duration-300 z-10 ${
+              isCallHudMinimized
+                ? 'bg-slate-900 px-3.5 py-1.5 border-emerald-500/30 text-white flex items-center justify-between'
+                : 'bg-gradient-to-r from-emerald-950/95 via-slate-900 to-emerald-950/95 px-3 sm:px-5 py-2.5 border-emerald-500/40 text-white shadow-md'
+            }`}
+          >
+            {isCallHudMinimized ? (
+              /* Minimized Compact Bar */
+              <div className="w-full flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="relative shrink-0">
+                    <img
+                      src={partner?.avatar || currentUserAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                      alt={partnerName}
+                      className={`w-6 h-6 rounded-full object-cover border transition-all ${
+                        isPartnerSpeaking ? 'border-emerald-400 ring-2 ring-emerald-400' : 'border-slate-600'
+                      }`}
+                    />
+                    <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  </div>
+                  <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5 font-mono">
+                    <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
+                    {callStatus === 'connected' ? formatDuration(callDuration) : 'Connecting...'}
+                  </span>
+                  {isPartnerSpeaking && (
+                    <span className="text-[10px] text-emerald-400 font-semibold animate-pulse hidden xs:inline truncate">
+                      Speaking 🎙️
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={onToggleMute}
+                    className={`p-1.5 rounded-lg text-xs transition cursor-pointer ${
+                      isMuted ? 'bg-rose-500/30 text-rose-300' : 'bg-slate-800 text-emerald-400 hover:bg-slate-700'
+                    }`}
+                    title={isMuted ? 'Unmute Mic' : 'Mute Mic'}
+                  >
+                    {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onEndCall}
+                    className="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer"
+                    title="End Call"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCallHudMinimized(false)}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                    title="Expand Call HUD"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Expanded Full HUD */
+              <div className="flex items-center justify-between gap-3">
+                {/* Left: Identity & Talking Status */}
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="relative shrink-0">
+                    <img
+                      src={partner?.avatar || currentUserAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                      alt={partnerName}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover border-2 transition-all ${
+                        isPartnerSpeaking
+                          ? 'border-emerald-400 ring-2 ring-emerald-400/80 shadow-lg shadow-emerald-500/20'
+                          : 'border-emerald-500/40'
+                      }`}
+                    />
+                    <span
+                      className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-slate-900 ${
+                        callStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400 animate-ping'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs sm:text-sm font-bold text-white truncate max-w-[90px] sm:max-w-[150px]">
+                        {partnerName}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 shrink-0">
+                        {callStatus === 'connected' ? 'Voice Active' : callStatus === 'calling' ? 'Calling...' : 'Connecting...'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium mt-0.5">
+                      {callStatus === 'connected' ? (
+                        <>
+                          <span className="font-mono font-bold tracking-wider">{formatDuration(callDuration)}</span>
+                          <span className="text-slate-500">•</span>
+                          <span className="truncate">
+                            {isPartnerSpeaking ? 'Speaking 🎙️' : 'Listening...'}
+                          </span>
+                        </>
+                      ) : (
+                        <span>Connecting audio line...</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Center: Live Equalizer Sound Wave Animation */}
+                {callStatus === 'connected' && (
+                  <div className="hidden sm:flex items-center gap-1 h-6 px-2.5 bg-slate-950/70 rounded-xl border border-emerald-500/20">
+                    <div className={`w-1 bg-emerald-400 rounded-full transition-all duration-150 ${isPartnerSpeaking ? 'h-4 animate-bounce' : 'h-1.5'}`} />
+                    <div className={`w-1 bg-emerald-400 rounded-full transition-all duration-150 ${isPartnerSpeaking ? 'h-5 animate-pulse' : 'h-2'}`} />
+                    <div className={`w-1 bg-emerald-400 rounded-full transition-all duration-150 ${isPartnerSpeaking ? 'h-3 animate-bounce' : 'h-1'}`} />
+                    <div className={`w-1 bg-emerald-400 rounded-full transition-all duration-150 ${isPartnerSpeaking ? 'h-4.5 animate-pulse' : 'h-2'}`} />
+                  </div>
+                )}
+
+                {/* Right: Interactive Audio Controls */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Mic Toggle */}
+                  <button
+                    type="button"
+                    id="btn-game-mute-toggle"
+                    onClick={onToggleMute}
+                    className={`p-2 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                      isMuted
+                        ? 'bg-rose-500/30 text-rose-300 border border-rose-500/50 hover:bg-rose-500/40'
+                        : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700'
+                    }`}
+                    title={isMuted ? 'Unmute your microphone' : 'Mute your microphone'}
+                  >
+                    {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span className="hidden md:inline">{isMuted ? 'Unmute' : 'Mute'}</span>
+                  </button>
+
+                  {/* Speaker Mute */}
+                  <button
+                    type="button"
+                    id="btn-game-speaker-toggle"
+                    onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
+                    className={`p-2 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                      isSpeakerMuted
+                        ? 'bg-rose-500/30 text-rose-300 border border-rose-500/50'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                    }`}
+                    title={isSpeakerMuted ? 'Unmute speaker' : 'Mute speaker'}
+                  >
+                    {isSpeakerMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5" />}
+                  </button>
+
+                  {/* Hangup Button */}
+                  <button
+                    type="button"
+                    id="btn-game-hangup-call"
+                    onClick={onEndCall}
+                    className="p-2 sm:px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    title="End Audio Call"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">End</span>
+                  </button>
+
+                  {/* Minimize HUD button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsCallHudMinimized(true)}
+                    className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                    title="Minimize HUD to slim bar"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Audio Call Suggestion Banner when not in call */}
+        {!isCallActive && onStartCall && (
+          <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border-b border-emerald-100/90 px-3 sm:px-4 py-1.5 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-700 truncate">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="text-[11px] sm:text-xs font-semibold truncate">
+                Voice link ready: Talk live with {partnerName || 'partner'} while playing!
+              </span>
+            </div>
+            <button
+              type="button"
+              id="btn-game-banner-start-call"
+              onClick={() => onStartCall('audio')}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition shadow-2xs flex items-center gap-1 cursor-pointer shrink-0"
+              title="Start audio call to talk while playing"
+            >
+              <Phone className="w-3 h-3" />
+              <span>Audio Call</span>
+            </button>
+          </div>
+        )}
 
         {/* ========================================================================= */}
         {/* 🔥 ACTIVE PLAYER TURN INDICATOR & PROFILE ARENA (CRITICAL USER REQUIREMENT) */}
         {/* ========================================================================= */}
-        <div className="px-5 py-3.5 bg-slate-900 text-white border-b border-slate-800">
+        {/* Mobile Compact Single-Row Turn Ribbon (sm:hidden) */}
+        <div className="sm:hidden px-3 py-1.5 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+          {/* Player 1 Mini */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-700 ring-1 ring-rose-400 shrink-0">
+              {(isPlayer1 ? currentUserAvatar : partner?.avatar) ? (
+                <img
+                  src={isPlayer1 ? currentUserAvatar : partner?.avatar}
+                  alt={isPlayer1 ? currentUserName : (partner?.name || partnerName)}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center font-bold text-[10px]">
+                  {(isPlayer1 ? currentUserName : partnerName)?.charAt(0) || 'P1'}
+                </div>
+              )}
+              {activeTurn === 'P1' && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
+              )}
+            </div>
+            <span className="font-bold text-white text-[11px] truncate max-w-[70px]">
+              {isPlayer1 ? currentUserName : (partner?.name || partnerName)}
+            </span>
+            <span className="text-[10px] text-rose-300 font-mono font-bold">W:{scores.p1}</span>
+          </div>
+
+          {/* Turn status pill */}
+          <div className="shrink-0 px-2 py-0.5 rounded-full bg-slate-950 border border-slate-700 text-[10px] font-bold">
+            {isMyTurn ? (
+              <span className="text-emerald-400 flex items-center gap-1 animate-pulse font-extrabold">
+                <Sparkles className="w-2.5 h-2.5" /> Your Move
+              </span>
+            ) : (
+              <span className="text-slate-400">
+                {partnerName || 'Partner'}'s Move
+              </span>
+            )}
+          </div>
+
+          {/* Player 2 Mini */}
+          <div className="flex items-center gap-1.5 min-w-0 justify-end">
+            <span className="text-[10px] text-indigo-300 font-mono font-bold">W:{scores.p2}</span>
+            <span className="font-bold text-white text-[11px] truncate max-w-[70px]">
+              {!isPlayer1 ? currentUserName : (partner?.name || partnerName)}
+            </span>
+            <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-700 ring-1 ring-indigo-400 shrink-0">
+              {(!isPlayer1 ? currentUserAvatar : partner?.avatar) ? (
+                <img
+                  src={!isPlayer1 ? currentUserAvatar : partner?.avatar}
+                  alt={!isPlayer1 ? currentUserName : (partner?.name || partnerName)}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center font-bold text-[10px]">
+                  {(!isPlayer1 ? currentUserName : partnerName)?.charAt(0) || 'P2'}
+                </div>
+              )}
+              {activeTurn === 'P2' && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop Dual Card Turn Arena (hidden sm:block) */}
+        <div className="hidden sm:block px-5 py-3.5 bg-slate-900 text-white border-b border-slate-800">
           <div className="flex items-center justify-between gap-3">
-            {/* PLAYER 1: YOU */}
+            {/* PLAYER 1 (Red / Primary) */}
             <div
               id="game-player-p1-area"
               className={`flex-1 p-3 rounded-2xl border transition-all duration-300 relative overflow-hidden flex items-center gap-3 ${
-                isMyTurn
+                activeTurn === 'P1'
                   ? 'bg-gradient-to-r from-rose-950/80 to-rose-900/60 border-rose-400/80 animate-turn-glow-rose shadow-lg'
                   : 'bg-slate-800/40 border-slate-700/50 opacity-70 hover:opacity-90'
               }`}
             >
               {/* Profile Icon with Turn Halo Ring */}
               <div className="relative shrink-0">
-                {isMyTurn && (
+                {activeTurn === 'P1' && (
                   <>
                     <div className="absolute -inset-1.5 rounded-full bg-gradient-to-r from-rose-500 via-pink-400 to-rose-600 animate-turn-halo opacity-80 blur-[2px]" />
                     <div className="absolute -inset-1 rounded-full border-2 border-rose-300 animate-radar-wave" />
@@ -402,21 +843,21 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
                 )}
                 <div
                   className={`relative w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shadow-md transition-all ${
-                    isMyTurn
+                    activeTurn === 'P1'
                       ? 'ring-2 ring-rose-300 bg-rose-500 text-white'
                       : 'ring-1 ring-slate-600 bg-slate-700 text-slate-200'
                   }`}
                 >
-                  {currentUserAvatar ? (
+                  {(isPlayer1 ? currentUserAvatar : partner?.avatar) ? (
                     <img
-                      src={currentUserAvatar}
-                      alt={currentUserName}
+                      src={isPlayer1 ? currentUserAvatar : partner?.avatar}
+                      alt={isPlayer1 ? currentUserName : (partner?.name || partnerName)}
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <span>{currentUserName?.charAt(0)?.toUpperCase() || 'Y'}</span>
+                    <span>{(isPlayer1 ? currentUserName : partnerName)?.charAt(0)?.toUpperCase() || 'P1'}</span>
                   )}
-                  {isMyTurn && (
+                  {activeTurn === 'P1' && (
                     <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-400 border-2 border-slate-900 rounded-full animate-ping" />
                   )}
                 </div>
@@ -425,16 +866,18 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
               {/* Player 1 Details */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-white truncate">{currentUserName}</span>
+                  <span className="text-xs font-bold text-white truncate">
+                    {isPlayer1 ? currentUserName : (partner?.name || partnerName || 'Partner')}
+                  </span>
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/30 text-rose-300 font-semibold shrink-0">
-                    You (❤️)
+                    {isPlayer1 ? 'You (❤️)' : 'Partner (❤️)'}
                   </span>
                 </div>
 
-                {isMyTurn ? (
+                {activeTurn === 'P1' ? (
                   <div className="flex items-center gap-1 mt-0.5 text-[11px] font-bold text-rose-300 animate-turn-badge">
                     <Sparkles className="w-3 h-3 text-rose-400 animate-spin" />
-                    <span>YOUR TURN TO PLAY</span>
+                    <span>{isPlayer1 ? 'YOUR TURN TO PLAY' : `${partnerName || 'Partner'}'S TURN`}</span>
                   </div>
                 ) : (
                   <span className="text-[10px] text-slate-400 block mt-0.5">Waiting for move...</span>
@@ -453,13 +896,14 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
               <div className="flex items-center gap-1 text-[11px] font-black tracking-wider uppercase">
                 {isMyTurn ? (
                   <span className="text-rose-400 flex items-center gap-1">
-                    <ArrowLeft className="w-3.5 h-3.5 animate-pulse" />
+                    {isPlayer1 ? <ArrowLeft className="w-3.5 h-3.5 animate-pulse" /> : <ArrowRight className="w-3.5 h-3.5 animate-pulse" />}
                     <span>YOUR MOVE</span>
                   </span>
                 ) : (
                   <span className="text-indigo-400 flex items-center gap-1">
-                    <span>{partnerName}'S MOVE</span>
-                    <ArrowRight className="w-3.5 h-3.5 animate-pulse" />
+                    {!isPlayer1 ? <ArrowLeft className="w-3.5 h-3.5 animate-pulse" /> : null}
+                    <span>{partnerName || 'PARTNER'}'S MOVE</span>
+                    {isPlayer1 ? <ArrowRight className="w-3.5 h-3.5 animate-pulse" /> : null}
                   </span>
                 )}
               </div>
@@ -470,18 +914,18 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
               </span>
             </div>
 
-            {/* PLAYER 2: PARTNER */}
+            {/* PLAYER 2 (Blue / Secondary) */}
             <div
               id="game-player-p2-area"
               className={`flex-1 p-3 rounded-2xl border transition-all duration-300 relative overflow-hidden flex items-center gap-3 ${
-                !isMyTurn
+                activeTurn === 'P2'
                   ? 'bg-gradient-to-r from-indigo-950/80 to-purple-900/60 border-indigo-400/80 animate-turn-glow-indigo shadow-lg'
                   : 'bg-slate-800/40 border-slate-700/50 opacity-70 hover:opacity-90'
               }`}
             >
               {/* Profile Icon with Turn Halo Ring */}
               <div className="relative shrink-0">
-                {!isMyTurn && (
+                {activeTurn === 'P2' && (
                   <>
                     <div className="absolute -inset-1.5 rounded-full bg-gradient-to-r from-indigo-500 via-purple-400 to-indigo-600 animate-turn-halo opacity-80 blur-[2px]" />
                     <div className="absolute -inset-1 rounded-full border-2 border-indigo-300 animate-radar-wave" />
@@ -489,21 +933,21 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
                 )}
                 <div
                   className={`relative w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shadow-md transition-all ${
-                    !isMyTurn
+                    activeTurn === 'P2'
                       ? 'ring-2 ring-indigo-300 bg-indigo-600 text-white'
                       : 'ring-1 ring-slate-600 bg-slate-700 text-slate-200'
                   }`}
                 >
-                  {partner?.avatar ? (
+                  {(!isPlayer1 ? currentUserAvatar : partner?.avatar) ? (
                     <img
-                      src={partner.avatar}
-                      alt={partner.name || partnerName}
+                      src={!isPlayer1 ? currentUserAvatar : partner?.avatar}
+                      alt={!isPlayer1 ? currentUserName : (partner?.name || partnerName)}
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <span>{partnerName?.charAt(0)?.toUpperCase() || 'P'}</span>
+                    <span>{(!isPlayer1 ? currentUserName : partnerName)?.charAt(0)?.toUpperCase() || 'P2'}</span>
                   )}
-                  {!isMyTurn && (
+                  {activeTurn === 'P2' && (
                     <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-indigo-400 border-2 border-slate-900 rounded-full animate-ping" />
                   )}
                 </div>
@@ -512,20 +956,18 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
               {/* Player 2 Details */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-white truncate">{partner?.name || partnerName}</span>
+                  <span className="text-xs font-bold text-white truncate">
+                    {!isPlayer1 ? currentUserName : (partner?.name || partnerName || 'Partner')}
+                  </span>
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/30 text-indigo-300 font-semibold shrink-0">
-                    Partner (💖)
+                    {!isPlayer1 ? 'You (💙)' : 'Partner (💙)'}
                   </span>
                 </div>
 
-                {!isMyTurn ? (
+                {activeTurn === 'P2' ? (
                   <div className="flex items-center gap-1 mt-0.5 text-[11px] font-bold text-indigo-300 animate-turn-badge">
-                    <span className="inline-flex gap-0.5">
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" />
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:0.2s]" />
-                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:0.4s]" />
-                    </span>
-                    <span>THINKING MOVE...</span>
+                    <Sparkles className="w-3 h-3 text-indigo-400 animate-spin" />
+                    <span>{!isPlayer1 ? 'YOUR TURN TO PLAY' : `${partnerName || 'Partner'}'S TURN`}</span>
                   </div>
                 ) : (
                   <span className="text-[10px] text-slate-400 block mt-0.5">Waiting for move...</span>
@@ -556,6 +998,84 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('draughts')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'draughts'
+                ? 'bg-white text-amber-700 shadow-xs border border-amber-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Grid className="w-3.5 h-3.5 text-amber-700" />
+            <span>Draughts (Checkers)</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-extrabold">NEW</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('ludo')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'ludo'
+                ? 'bg-white text-sky-700 shadow-xs border border-sky-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Dices className="w-3.5 h-3.5 text-sky-600" />
+            <span>Ludo for Two</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-sky-100 text-sky-800 font-extrabold">NEW</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('candy_crush')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'candy_crush'
+                ? 'bg-white text-pink-600 shadow-xs border border-pink-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Candy className="w-3.5 h-3.5 text-pink-500" />
+            <span>Sweet Candy Crush</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-pink-100 text-pink-700 font-extrabold">NEW</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('battleship')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'battleship'
+                ? 'bg-white text-cyan-600 shadow-xs border border-cyan-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Anchor className="w-3.5 h-3.5 text-cyan-500" />
+            <span>Fleet Strike</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-cyan-100 text-cyan-800 font-extrabold">HOT</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('dots_and_boxes')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'dots_and_boxes'
+                ? 'bg-white text-purple-600 shadow-xs border border-purple-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Box className="w-3.5 h-3.5 text-purple-500" />
+            <span>Dots & Boxes</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-800 font-extrabold">NEW</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('deep_cards')}
+            className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'deep_cards'
+                ? 'bg-white text-rose-600 shadow-xs border border-rose-300'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Wine className="w-3.5 h-3.5 text-rose-500" />
+            <span>Deep Cards & Never</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-rose-100 text-rose-700 font-extrabold">POPULAR</span>
+          </button>
+
+          <button
             onClick={() => {
               if (onOpenChessModal) {
                 onOpenChessModal();
@@ -572,7 +1092,6 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
           >
             <Swords className="w-3.5 h-3.5 text-amber-600" />
             <span>Live Chess</span>
-            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-extrabold">NEW</span>
           </button>
 
           <button
@@ -625,7 +1144,106 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
         </div>
 
         {/* Game Contents */}
-        <div className="p-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-rose-50/20">
+        <div className="p-2 sm:p-5 md:p-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-rose-50/20">
+          {/* ========================================================================= */}
+          {/* GAME: DRAUGHTS / CHECKERS */}
+          {/* ========================================================================= */}
+          {activeTab === 'draughts' && (
+            <DraughtsGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              isMyTurn={isMyTurn}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('draughts', actionData)}
+              incomingAction={incomingGameData?.gameType === 'draughts' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
+          {/* ========================================================================= */}
+          {/* GAME: LUDO FOR TWO */}
+          {/* ========================================================================= */}
+          {activeTab === 'ludo' && (
+            <LudoGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              isMyTurn={isMyTurn}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('ludo', actionData)}
+              incomingAction={incomingGameData?.gameType === 'ludo' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
+          {/* ========================================================================= */}
+          {/* GAME: SWEET CANDY CRUSH FOR TWO */}
+          {/* ========================================================================= */}
+          {activeTab === 'candy_crush' && (
+            <CandyCrushGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              isMyTurn={isMyTurn}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('candy_crush', actionData)}
+              incomingAction={incomingGameData?.gameType === 'candy_crush' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
+          {/* ========================================================================= */}
+          {/* GAME: FLEET STRIKE (BATTLESHIP) */}
+          {/* ========================================================================= */}
+          {activeTab === 'battleship' && (
+            <BattleshipGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('battleship', actionData)}
+              incomingAction={incomingGameData?.gameType === 'battleship' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
+          {/* ========================================================================= */}
+          {/* GAME: DOTS & BOXES (LOVE TERRITORY) */}
+          {/* ========================================================================= */}
+          {activeTab === 'dots_and_boxes' && (
+            <DotsAndBoxesGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('dots_and_boxes', actionData)}
+              incomingAction={incomingGameData?.gameType === 'dots_and_boxes' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
+          {/* ========================================================================= */}
+          {/* GAME: DEEP CARDS & NEVER HAVE I EVER */}
+          {/* ========================================================================= */}
+          {activeTab === 'deep_cards' && (
+            <DeepCardsGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              partnerName={partnerName}
+              currentUserAvatar={currentUserAvatar}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('deep_cards', actionData)}
+              incomingAction={incomingGameData?.gameType === 'deep_cards' ? incomingGameData.actionData : undefined}
+            />
+          )}
+
           {/* ========================================================================= */}
           {/* GAME 0: LIVE CHESS */}
           {/* ========================================================================= */}
@@ -823,55 +1441,18 @@ export const CoupleGamesModal: React.FC<CoupleGamesModalProps> = ({
           {/* GAME 4: TRUTH OR DARE */}
           {/* ========================================================================= */}
           {activeTab === 'truth_or_dare' && (
-            <div className="space-y-6">
-              <div className="text-center">
-                <h3 className="text-base font-bold text-slate-800">Intimate Truth or Dare for Couples</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {todTurn === 'P1'
-                    ? `It's your turn (${currentUserName})! Choose Truth or Dare below:`
-                    : `It's ${partnerName}'s turn! Choose a card for them:`}
-                </p>
-              </div>
-
-              {!todSelectedCard ? (
-                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
-                  <button
-                    onClick={() => handleDrawCard('truth')}
-                    className="p-6 rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 border-2 border-indigo-200 hover:border-indigo-400 flex flex-col items-center gap-3 transition-all hover:scale-103 shadow-sm cursor-pointer"
-                  >
-                    <span className="text-4xl">💭</span>
-                    <span className="font-bold text-base text-indigo-900">Pick Truth</span>
-                    <span className="text-[11px] text-indigo-600">Deep, romantic & sincere</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleDrawCard('dare')}
-                    className="p-6 rounded-3xl bg-gradient-to-br from-rose-50 to-pink-50 border-2 border-rose-200 hover:border-rose-400 flex flex-col items-center gap-3 transition-all hover:scale-103 shadow-sm cursor-pointer"
-                  >
-                    <span className="text-4xl">🔥</span>
-                    <span className="font-bold text-base text-rose-900">Pick Dare</span>
-                    <span className="text-[11px] text-rose-600">Playful, spicy & sweet</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="max-w-md mx-auto p-6 rounded-3xl bg-gradient-to-br from-rose-500 via-pink-500 to-purple-600 text-white text-center shadow-xl space-y-4 animate-scale-in">
-                  <div className="inline-block px-3 py-1 rounded-full bg-white/20 text-white text-xs font-bold uppercase tracking-wider">
-                    {todSelectedCard.type === 'truth' ? '💭 Secret Truth' : '🔥 Playful Dare'}
-                  </div>
-                  <h4 className="text-base sm:text-lg font-bold leading-relaxed">
-                    "{todSelectedCard.text}"
-                  </h4>
-                  <div className="pt-2 flex justify-center gap-3">
-                    <button
-                      onClick={handleNextTodTurn}
-                      className="px-5 py-2.5 rounded-xl bg-white text-slate-900 font-bold text-xs hover:bg-slate-100 shadow-md transition-all cursor-pointer"
-                    >
-                      Complete & Pass Turn
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <TruthOrDareGame
+              currentUserId={currentUserId}
+              currentUserName={currentUserName}
+              currentUserAvatar={currentUserAvatar}
+              partnerName={partnerName}
+              partnerAvatar={partner?.avatar}
+              isPlayer1={isPlayer1}
+              onBroadcastAction={(actionData) => onBroadcastGameAction('truth_or_dare', actionData)}
+              incomingAction={
+                incomingGameData?.gameType === 'truth_or_dare' ? incomingGameData.actionData : undefined
+              }
+            />
           )}
 
           {/* ========================================================================= */}

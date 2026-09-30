@@ -4,15 +4,19 @@
  * active speaker detection, and automatic ICE candidate negotiation.
  */
 
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-  ],
-  iceCandidatePoolSize: 10,
-};
+import {
+  GLOBAL_RTC_CONFIG,
+  fetchFreshIceServers,
+  getCustomUserIceServers,
+  DEFAULT_RTC_ICE_SERVERS,
+} from './webrtc';
+import {
+  getStudioAudioConstraints,
+  getStudioVideoConstraints,
+  StudioNoiseFilterPipeline,
+  enhanceCallSDP,
+  applyHDQualityToRTCSenders,
+} from './audioProcessor';
 
 export interface SquadCallHandlers {
   onStreamsUpdated: (streams: Map<string, MediaStream>) => void;
@@ -38,9 +42,64 @@ export class SquadCallManager {
   private volumeCheckInterval: number | null = null;
   private speakingState: Record<string, boolean> = {};
   private candidateQueues = new Map<string, RTCIceCandidateInit[]>();
+  private noiseFilterPipeline: StudioNoiseFilterPipeline | null = null;
+  private isNoiseCancellationActive = true;
+  private isEchoSuppressionActive = true;
+  private isAudioMuted = false;
+  private isVideoMuted = false;
 
   constructor(handlers: SquadCallHandlers) {
     this.handlers = handlers;
+  }
+
+  public async setNoiseCancellation(enabled: boolean): Promise<void> {
+    this.isNoiseCancellationActive = enabled;
+    if (this.noiseFilterPipeline) {
+      await this.noiseFilterPipeline.setNoiseCancellation(enabled);
+    }
+    // Refresh audio sender track across all mesh peer connections respecting mute state
+    if (this.localStream) {
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !this.isAudioMuted;
+        this.peers.forEach((peer) => {
+          const senders = peer.pc.getSenders();
+          const audioSender = senders.find((s) => s.track?.kind === 'audio');
+          if (audioSender) {
+            audioSender.replaceTrack(audioTrack).catch(() => {});
+          }
+        });
+      }
+    }
+  }
+
+  public isNoiseCancellationEnabled(): boolean {
+    return this.isNoiseCancellationActive;
+  }
+
+  public async setEchoSuppression(enabled: boolean): Promise<void> {
+    this.isEchoSuppressionActive = enabled;
+    if (this.noiseFilterPipeline) {
+      await this.noiseFilterPipeline.setEchoCancellation(enabled);
+    }
+    // Refresh audio sender track across all mesh peer connections
+    if (this.localStream) {
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = true;
+        this.peers.forEach((peer) => {
+          const senders = peer.pc.getSenders();
+          const audioSender = senders.find((s) => s.track?.kind === 'audio');
+          if (audioSender) {
+            audioSender.replaceTrack(audioTrack).catch(() => {});
+          }
+        });
+      }
+    }
+  }
+
+  public isEchoSuppressionEnabled(): boolean {
+    return this.isEchoSuppressionActive;
   }
 
   public getLocalStream(): MediaStream | null {
@@ -83,29 +142,61 @@ export class SquadCallManager {
     this.cleanup();
 
     const constraints: MediaStreamConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video:
-        callType === 'video'
-          ? {
-              width: { ideal: 1280, max: 1920 },
-              height: { ideal: 720, max: 1080 },
-              facingMode: 'user',
-            }
-          : false,
+      audio: getStudioAudioConstraints(this.isNoiseCancellationActive, this.isEchoSuppressionActive),
+      video: callType === 'video' ? getStudioVideoConstraints() : false,
     };
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Camera and microphone are not supported on this browser or connection is not secure (HTTPS required).');
+    }
+
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+      rawStream.getTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      this.noiseFilterPipeline = new StudioNoiseFilterPipeline(
+        rawStream,
+        this.isNoiseCancellationActive,
+        this.isEchoSuppressionActive
+      );
+      this.localStream = this.noiseFilterPipeline.getStream();
     } catch (err) {
       console.warn('getUserMedia ideal constraints failed, trying basic fallback:', err);
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: callType === 'video',
-      });
+      try {
+        const rawStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: callType === 'video' ? { facingMode: 'user' } : false,
+        });
+        rawStream.getTracks().forEach((track) => {
+          track.enabled = true;
+        });
+        this.noiseFilterPipeline = new StudioNoiseFilterPipeline(
+          rawStream,
+          this.isNoiseCancellationActive,
+          this.isEchoSuppressionActive
+        );
+        this.localStream = this.noiseFilterPipeline.getStream();
+      } catch (fallbackErr) {
+        if (callType === 'video') {
+          console.warn('Camera failed or permission denied, falling back to audio-only for squad call:', fallbackErr);
+          const rawStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: false,
+          });
+          rawStream.getTracks().forEach((track) => {
+            track.enabled = true;
+          });
+          this.noiseFilterPipeline = new StudioNoiseFilterPipeline(
+            rawStream,
+            this.isNoiseCancellationActive,
+            this.isEchoSuppressionActive
+          );
+          this.localStream = this.noiseFilterPipeline.getStream();
+        } else {
+          throw fallbackErr;
+        }
+      }
     }
 
     this.setupAudioAnalysis();
@@ -188,29 +279,59 @@ export class SquadCallManager {
   public async addPeer(targetSocketId: string, isInitiator: boolean): Promise<void> {
     if (this.peers.has(targetSocketId)) return;
 
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const customIce = getCustomUserIceServers();
+    let iceServers = [...customIce, ...(GLOBAL_RTC_CONFIG.iceServers || DEFAULT_RTC_ICE_SERVERS)];
+    try {
+      const fresh = await fetchFreshIceServers();
+      if (fresh && fresh.length > 0) {
+        iceServers = fresh;
+      }
+    } catch {}
+
+    const pc = new RTCPeerConnection({
+      ...GLOBAL_RTC_CONFIG,
+      iceServers,
+    });
     const remoteStream = new MediaStream();
 
     this.peers.set(targetSocketId, { pc, remoteStream });
 
     // Handle incoming remote tracks
     pc.ontrack = (event) => {
-      event.streams[0]?.getTracks().forEach((track) => {
-        if (!remoteStream.getTracks().includes(track)) {
-          remoteStream.addTrack(track);
+      if (event.streams && event.streams[0]) {
+        event.streams[0].getTracks().forEach((track) => {
+          track.enabled = true;
+          if (!remoteStream.getTracks().includes(track)) {
+            remoteStream.addTrack(track);
+          }
+        });
+      }
+      if (event.track) {
+        event.track.enabled = true;
+        if (!remoteStream.getTracks().includes(event.track)) {
+          remoteStream.addTrack(event.track);
         }
-      });
+      }
 
-      // Hook up remote audio to analyser for speaker highlight
+      // Hook up remote audio to analyser and hardware speakers
       if (this.audioContext && remoteStream.getAudioTracks().length > 0 && !this.remoteAnalysers.has(targetSocketId)) {
         try {
+          if (this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(() => {});
+          }
           const source = this.audioContext.createMediaStreamSource(remoteStream);
           const analyser = this.audioContext.createAnalyser();
           analyser.fftSize = 256;
           source.connect(analyser);
+
+          const gainNode = this.audioContext.createGain();
+          gainNode.gain.value = 1.0;
+          source.connect(gainNode);
+          gainNode.connect(this.audioContext.destination);
+
           this.remoteAnalysers.set(targetSocketId, analyser);
-        } catch {
-          // ignore
+        } catch (err) {
+          console.warn('Could not route remote peer audio:', err);
         }
       }
 
@@ -234,28 +355,40 @@ export class SquadCallManager {
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         this.handlers.onSignalData(targetSocketId, {
-          candidate: event.candidate.toJSON(),
+          candidate: event.candidate.toJSON ? event.candidate.toJSON() : {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          },
         });
       }
     };
 
-    // Add local tracks to this peer connection
+    // Add local tracks to this peer connection respecting mute state
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
-        if (this.localStream) {
-          pc.addTrack(track, this.localStream);
+        if (track.kind === 'audio') {
+          track.enabled = !this.isAudioMuted;
+        } else if (track.kind === 'video') {
+          track.enabled = !this.isVideoMuted;
         }
+        pc.addTrack(track, this.localStream!);
       });
     }
 
     // If initiator, generate offer
     if (isInitiator) {
       try {
-        const offer = await pc.createOffer({
+        const rawOffer = await pc.createOffer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true,
         });
+        const offer: RTCSessionDescriptionInit = {
+          type: rawOffer.type,
+          sdp: enhanceCallSDP(rawOffer.sdp || ''),
+        };
         await pc.setLocalDescription(offer);
+        applyHDQualityToRTCSenders(pc).catch(() => {});
         this.handlers.onSignalData(targetSocketId, { offer });
       } catch (err) {
         console.error(`Error creating offer for ${targetSocketId}:`, err);
@@ -280,8 +413,13 @@ export class SquadCallManager {
       if (signalData.offer) {
         await pc.setRemoteDescription(new RTCSessionDescription(signalData.offer));
         await this.flushQueuedCandidates(senderSocketId, pc);
-        const answer = await pc.createAnswer();
+        const rawAnswer = await pc.createAnswer();
+        const answer: RTCSessionDescriptionInit = {
+          type: rawAnswer.type,
+          sdp: enhanceCallSDP(rawAnswer.sdp || ''),
+        };
         await pc.setLocalDescription(answer);
+        applyHDQualityToRTCSenders(pc).catch(() => {});
         this.handlers.onSignalData(senderSocketId, { answer });
       } else if (signalData.answer) {
         await pc.setRemoteDescription(new RTCSessionDescription(signalData.answer));
@@ -337,24 +475,61 @@ export class SquadCallManager {
     this.handlers.onStreamsUpdated(this.getRemoteStreams());
   }
 
-  public toggleMuteAudio(): boolean {
-    if (!this.localStream) return false;
-    const audioTrack = this.localStream.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      return !audioTrack.enabled; // returns isMuted
+  public setAudioMuted(muted: boolean): boolean {
+    this.isAudioMuted = muted;
+    if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !muted;
+      });
     }
-    return false;
+    if (this.noiseFilterPipeline) {
+      this.noiseFilterPipeline.getStream().getAudioTracks().forEach((track) => {
+        track.enabled = !muted;
+      });
+    }
+    this.peers.forEach((peer) => {
+      peer.pc.getSenders().forEach((sender) => {
+        if (sender.track && sender.track.kind === 'audio') {
+          sender.track.enabled = !muted;
+        }
+      });
+      peer.pc.getTransceivers().forEach((transceiver) => {
+        if (transceiver.sender.track && transceiver.sender.track.kind === 'audio') {
+          transceiver.sender.track.enabled = !muted;
+        }
+      });
+    });
+    return this.isAudioMuted;
+  }
+
+  public toggleMuteAudio(): boolean {
+    return this.setAudioMuted(!this.isAudioMuted);
+  }
+
+  public setVideoMuted(off: boolean): boolean {
+    this.isVideoMuted = off;
+    if (this.localStream) {
+      this.localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !off;
+      });
+    }
+    this.peers.forEach((peer) => {
+      peer.pc.getSenders().forEach((sender) => {
+        if (sender.track && sender.track.kind === 'video') {
+          sender.track.enabled = !off;
+        }
+      });
+      peer.pc.getTransceivers().forEach((transceiver) => {
+        if (transceiver.sender.track && transceiver.sender.track.kind === 'video') {
+          transceiver.sender.track.enabled = !off;
+        }
+      });
+    });
+    return this.isVideoMuted;
   }
 
   public toggleMuteVideo(): boolean {
-    if (!this.localStream) return false;
-    const videoTrack = this.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      return !videoTrack.enabled; // returns isVideoOff
-    }
-    return false;
+    return this.setVideoMuted(!this.isVideoMuted);
   }
 
   public async toggleScreenShare(): Promise<boolean> {
@@ -410,6 +585,11 @@ export class SquadCallManager {
   }
 
   public cleanup(): void {
+    if (this.noiseFilterPipeline) {
+      this.noiseFilterPipeline.destroy();
+      this.noiseFilterPipeline = null;
+    }
+
     if (this.volumeCheckInterval) {
       clearInterval(this.volumeCheckInterval);
       this.volumeCheckInterval = null;

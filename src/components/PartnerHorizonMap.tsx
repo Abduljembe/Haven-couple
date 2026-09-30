@@ -24,6 +24,9 @@ import { HorizonLocation, UserProfile } from '../types';
 import { detectRealDeviceLocation } from '../utils/geolocation';
 import { OfflineWorldRadar } from './OfflineWorldRadar';
 
+// Google Maps global declaration
+declare const google: any;
+
 interface PartnerHorizonMapProps {
   currentUserName: string;
   currentUserAvatar: string;
@@ -155,7 +158,7 @@ const GeodesicHeartLine: React.FC<{
   partnerPos: { lat: number; lng: number };
 }> = ({ myPos, partnerPos }) => {
   const map = useMap();
-  const polylineRef = useRef<google.maps.Polyline | null>(null);
+  const polylineRef = useRef<any>(null);
 
   useEffect(() => {
     if (!map || typeof google === 'undefined' || !google.maps) return;
@@ -195,9 +198,9 @@ const CustomMapOverlay: React.FC<{
   useEffect(() => {
     if (!map || typeof google === 'undefined' || !google.maps?.OverlayView) return;
 
-    let overlayInstance: google.maps.OverlayView | null = null;
+    let overlayInstance: any = null;
 
-    class HorizonOverlay extends google.maps.OverlayView {
+    class HorizonOverlay extends (google.maps.OverlayView as { new(): any }) {
       div: HTMLDivElement;
 
       constructor() {
@@ -210,13 +213,13 @@ const CustomMapOverlay: React.FC<{
       }
 
       onAdd() {
-        const panes = this.getPanes();
+        const panes = (this as any).getPanes?.();
         panes?.overlayMouseTarget?.appendChild(this.div);
         setContainer(this.div);
       }
 
       draw() {
-        const projection = this.getProjection();
+        const projection = (this as any).getProjection?.();
         if (!projection || !this.div) return;
         const latLng = new google.maps.LatLng(position.lat, position.lng);
         const point = projection.fromLatLngToDivPixel(latLng);

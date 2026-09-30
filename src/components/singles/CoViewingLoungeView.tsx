@@ -496,7 +496,22 @@ export const CoViewingLoungeView: React.FC<CoViewingLoungeViewProps> = ({
   const [showLoungeYtSearch, setShowLoungeYtSearch] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const ytIframeRef = useRef<HTMLIFrameElement | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Send control commands to embedded YouTube iframe
+  const sendYouTubeCommand = useCallback((func: string, args: any[] = []) => {
+    if (ytIframeRef.current?.contentWindow) {
+      try {
+        ytIframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func, args }),
+          '*'
+        );
+      } catch (err) {
+        console.warn('YouTube command error:', err);
+      }
+    }
+  }, []);
 
   // Pick co-viewers from community singles
   const attendees = useMemo(() => {
@@ -659,16 +674,16 @@ export const CoViewingLoungeView: React.FC<CoViewingLoungeViewProps> = ({
 
   // Play/Pause toggle
   const handleTogglePlay = () => {
+    const next = !isPlaying;
+    setIsPlaying(next);
     if (selectedTheater.type === 'video' && videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
+      if (next) {
         videoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+      } else {
+        videoRef.current.pause();
       }
     } else {
-      setIsPlaying(!isPlaying);
+      sendYouTubeCommand(next ? 'playVideo' : 'pauseVideo');
     }
   };
 
@@ -678,6 +693,30 @@ export const CoViewingLoungeView: React.FC<CoViewingLoungeViewProps> = ({
     setIsMuted(next);
     if (videoRef.current) {
       videoRef.current.muted = next;
+    }
+    if (next) {
+      sendYouTubeCommand('mute');
+    } else {
+      sendYouTubeCommand('unMute');
+      sendYouTubeCommand('setVolume', [Math.round((volume > 0 ? volume : 0.8) * 100)]);
+    }
+  };
+
+  // Volume slider change handler
+  const handleVolumeChange = (newVal: number) => {
+    const clamped = Math.max(0, Math.min(1, newVal));
+    setVolume(clamped);
+    const muted = clamped === 0;
+    setIsMuted(muted);
+    if (videoRef.current) {
+      videoRef.current.volume = clamped;
+      videoRef.current.muted = muted;
+    }
+    if (muted) {
+      sendYouTubeCommand('mute');
+    } else {
+      sendYouTubeCommand('unMute');
+      sendYouTubeCommand('setVolume', [Math.round(clamped * 100)]);
     }
   };
 
@@ -1108,11 +1147,20 @@ export const CoViewingLoungeView: React.FC<CoViewingLoungeViewProps> = ({
           /* 2. Embedded YouTube Player */
           <div className="relative w-full h-full aspect-video">
             <iframe
+              ref={ytIframeRef}
               src={`https://www.youtube-nocookie.com/embed/${currentYtId}?autoplay=${isPlaying ? 1 : 0}&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
               title={selectedTheater.title}
               className="w-full h-full border-0 pointer-events-auto"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               allowFullScreen
+              onLoad={() => {
+                if (isMuted) {
+                  sendYouTubeCommand('mute');
+                } else {
+                  sendYouTubeCommand('unMute');
+                  sendYouTubeCommand('setVolume', [Math.round((volume > 0 ? volume : 0.8) * 100)]);
+                }
+              }}
             />
           </div>
         ) : (
@@ -1264,17 +1312,12 @@ export const CoViewingLoungeView: React.FC<CoViewingLoungeViewProps> = ({
                   max="1"
                   step="0.05"
                   value={isMuted ? 0 : volume}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setVolume(v);
-                    setIsMuted(v === 0);
-                    if (videoRef.current) {
-                      videoRef.current.volume = v;
-                      videoRef.current.muted = v === 0;
-                    }
-                  }}
-                  className="w-16 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-rose-500 hidden sm:inline"
+                  onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                  className="w-16 sm:w-20 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-rose-500"
                 />
+                <span className="text-[10px] text-stone-400 font-mono w-6 text-right select-none">
+                  {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
+                </span>
               </div>
             </div>
           )}

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import {
   X,
+  ArrowLeft,
   Search,
   Music,
+  Headphones,
   Radio,
   Gamepad2,
   Swords,
@@ -22,6 +24,16 @@ import {
   Pause,
   Sliders,
   Check,
+  ShieldCheck,
+  FileText,
+  Settings,
+  Lock,
+  Grid,
+  Candy,
+  Dices,
+  QrCode,
+  Smartphone,
+  CircleDot,
 } from 'lucide-react';
 import { SpaceType } from '../types';
 import { ColorMode, ThemeConfig, ThemeId, THEME_PRESETS } from '../utils/theme';
@@ -37,6 +49,9 @@ interface SpaceFeaturesModalProps {
   onOpenMusicLounge: () => void;
   onOpenSoundboard: () => void;
   onOpenGamesLounge: () => void;
+  onOpenDraughts?: () => void;
+  onOpenLudo?: () => void;
+  onOpenCandyCrush?: () => void;
   onOpenChess: () => void;
   onOpenWatchTogether: () => void;
   onOpenCanvas: () => void;
@@ -54,9 +69,28 @@ interface SpaceFeaturesModalProps {
   currentMusicTitle?: string;
   onToggleMusicPlayPause?: () => void;
   onOpenSinglesLounge?: () => void;
+  onOpenSecurity?: () => void;
+  onOpenSettings?: () => void;
+  onOpenActivityLog?: () => void;
+  onOpenQRPairing?: () => void;
+  onOpenInstallModal?: () => void;
+  onOpenStatus?: () => void;
+  hasUnreadStatus?: boolean;
 }
 
-type FeatureCategory = 'all' | 'media' | 'games' | 'creative' | 'bond';
+type FeatureCategory = 'all' | 'media' | 'games' | 'creative' | 'bond' | 'settings';
+
+interface FeatureItem {
+  id: string;
+  name: string;
+  desc: string;
+  category: FeatureCategory;
+  icon: any;
+  color: string;
+  tag: string;
+  action: () => void;
+  highlight?: boolean;
+}
 
 export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
   isOpen,
@@ -69,6 +103,9 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
   onOpenMusicLounge,
   onOpenSoundboard,
   onOpenGamesLounge,
+  onOpenDraughts,
+  onOpenLudo,
+  onOpenCandyCrush,
   onOpenChess,
   onOpenWatchTogether,
   onOpenCanvas,
@@ -86,6 +123,13 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
   currentMusicTitle,
   onToggleMusicPlayPause,
   onOpenSinglesLounge,
+  onOpenSecurity,
+  onOpenSettings,
+  onOpenActivityLog,
+  onOpenQRPairing,
+  onOpenInstallModal,
+  onOpenStatus,
+  hasUnreadStatus = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<FeatureCategory>('all');
@@ -94,34 +138,41 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
 
   const isDark = colorMode === 'dark';
   const isFriends = spaceType === 'friends';
+  const isCouple = spaceType === 'couple';
+  const isSingle = (spaceType as any) === 'single';
 
-  const allFeatures = [
-    {
-      id: 'singles-lounge',
-      name: 'Singles Lounge & Spark Hub',
-      desc: 'Register profile, discover singles, send waves, or invite people',
+  // Base features shared between friends and couple spaces
+  const sharedFeatures: FeatureItem[] = [
+    ...(onOpenStatus ? [{
+      id: 'haven-status',
+      name: isFriends ? 'Squad Status & Stories' : 'Haven Status & Stories',
+      desc: isFriends
+        ? 'Share 24h photo & text updates with your squad. View friends’ stories, react & leave comments!'
+        : 'Share 24h photo & notes with your partner. View updates & leave comments!',
       category: 'bond' as FeatureCategory,
-      icon: Sparkles,
-      color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
-      tag: 'Community',
-      action: onOpenSinglesLounge || (() => {}),
-      highlight: true,
-    },
+      icon: CircleDot,
+      color: 'text-[#00a884] bg-[#00a884]/15 border-[#00a884]/30',
+      tag: '24h Stories',
+      action: onOpenStatus,
+      highlight: hasUnreadStatus,
+    }] : []),
     {
       id: 'music-lounge',
-      name: isFriends ? 'Squad Music Lounge' : 'Music Lounge',
-      desc: 'Synchronized Web Music, Lofi Streams & Jukebox',
+      name: isFriends ? 'Squad Spotify Lounge' : 'Spotify Music Lounge',
+      desc: 'Collaborative DJ streaming, search & Spotify background lounge',
       category: 'media' as FeatureCategory,
-      icon: Music,
-      color: 'text-purple-500 bg-purple-500/10 border-purple-500/20',
-      tag: isMusicPlaying ? 'Playing' : 'Audio',
+      icon: Headphones,
+      color: 'text-[#1DB954] bg-[#1DB954]/15 border-[#1DB954]/30',
+      tag: isMusicPlaying ? 'Streaming' : 'Spotify',
       action: onOpenMusicLounge,
       highlight: isMusicPlaying,
     },
     {
       id: 'soundboard',
       name: isFriends ? 'Live Squad Soundboard' : 'Love Soundboard',
-      desc: 'Funny live reactions, applause, meme cues & sound FX',
+      desc: isFriends
+        ? 'Funny live squad reactions, applause, meme cues & sound FX'
+        : 'Sweet reactions, applause, heartbeat cues & sound FX',
       category: 'media' as FeatureCategory,
       icon: Radio,
       color: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
@@ -130,8 +181,10 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
     },
     {
       id: 'games-lounge',
-      name: isFriends ? 'Party Games Lounge' : 'Couple Games Lounge',
-      desc: 'Heart-Tac-Toe, Intimacy/Squad Trivia & Rapid Challenges',
+      name: isFriends ? 'Party Games Lounge' : 'Games for Two & Couple Lounge',
+      desc: isFriends
+        ? 'Multiplayer Party games, Trivia, Draughts, Ludo & Candy Crush'
+        : 'Connect Hearts, Trivia, Draughts, Ludo & Candy Crush Duels',
       category: 'games' as FeatureCategory,
       icon: Gamepad2,
       color: 'text-indigo-500 bg-indigo-500/10 border-indigo-500/20',
@@ -139,8 +192,47 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
       action: onOpenGamesLounge,
     },
     {
+      id: 'draughts',
+      name: isFriends ? 'Draughts (Checkers) Arena' : 'Draughts (Checkers) for Two',
+      desc: 'Classic 8x8 checkers duel with king crowns & multi-jump captures',
+      category: 'games' as FeatureCategory,
+      icon: Grid,
+      color: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
+      tag: 'Checkers Duel',
+      action: () => {
+        if (onOpenDraughts) onOpenDraughts();
+        else onOpenGamesLounge();
+      },
+    },
+    {
+      id: 'ludo',
+      name: isFriends ? 'Ludo Squad Arena' : 'Ludo Arena for Two',
+      desc: 'Race 4 tokens home with animated 3D dice rolls & safe-star tactics',
+      category: 'games' as FeatureCategory,
+      icon: Dices,
+      color: 'text-sky-500 bg-sky-500/10 border-sky-500/20',
+      tag: 'Dice Board',
+      action: () => {
+        if (onOpenLudo) onOpenLudo();
+        else onOpenGamesLounge();
+      },
+    },
+    {
+      id: 'candy-crush',
+      name: isFriends ? 'Sweet Candy Crush Battle' : 'Sweet Candy Crush for Two',
+      desc: 'Real-time match-3 puzzle battle with striped candies, bombs & cascades',
+      category: 'games' as FeatureCategory,
+      icon: Candy,
+      color: 'text-pink-500 bg-pink-500/10 border-pink-500/20',
+      tag: 'Match-3',
+      action: () => {
+        if (onOpenCandyCrush) onOpenCandyCrush();
+        else onOpenGamesLounge();
+      },
+    },
+    {
       id: 'chess',
-      name: 'Live Real-time Chess',
+      name: isFriends ? 'Squad Chess Match' : 'Live Real-time Chess',
       desc: 'Competitive 1v1 board match with move history & turn timer',
       category: 'games' as FeatureCategory,
       icon: Swords,
@@ -160,7 +252,7 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
     },
     {
       id: 'live-canvas',
-      name: 'Live Whiteboard & Canvas',
+      name: isFriends ? 'Live Squad Whiteboard & Canvas' : 'Live Whiteboard & Canvas',
       desc: 'Real-time collaborative doodle pad, stickers & brush tools',
       category: 'creative' as FeatureCategory,
       icon: Palette,
@@ -168,6 +260,94 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
       tag: 'Real-time Drawing',
       action: onOpenCanvas,
     },
+    {
+      id: 'bucket-list',
+      name: isFriends ? 'Squad Adventures & Goals' : 'Couple Bucket List',
+      desc: isFriends
+        ? 'Shared group trips, adventures, hangouts & bucket goals'
+        : 'Shared dreams, travel bucket list, adventures & photo proofs',
+      category: 'bond' as FeatureCategory,
+      icon: Heart,
+      color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
+      tag: 'Goals',
+      action: onOpenBucketList,
+    },
+    {
+      id: 'wallpaper',
+      name: 'Chat Wallpaper & Doodles',
+      desc: 'Haven-style custom chat themes, doodles, glows & wallpapers',
+      category: 'media' as FeatureCategory,
+      icon: Wallpaper,
+      color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
+      tag: 'Customization',
+      action: onOpenWallpaperPicker,
+    },
+    {
+      id: 'theme-picker',
+      name: 'Atmosphere & Color Palettes',
+      desc: 'Switch between 6 living color themes with glowing ambient light',
+      category: 'creative' as FeatureCategory,
+      icon: Sliders,
+      color: 'text-violet-500 bg-violet-500/10 border-violet-500/20',
+      tag: 'Palettes',
+      action: onOpenThemePicker,
+    },
+    {
+      id: 'encryption-security',
+      name: 'End-to-End Encryption',
+      desc: 'Verify safety numbers, WebRTC cryptographic keys & zero-knowledge status',
+      category: 'settings' as FeatureCategory,
+      icon: ShieldCheck,
+      color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
+      tag: 'Security',
+      action: onOpenSecurity || (() => {}),
+    },
+    {
+      id: 'activity-log',
+      name: 'Activity & Audit Log',
+      desc: 'Real-time security logs, call sessions, media sync & space events audit trail',
+      category: 'settings' as FeatureCategory,
+      icon: FileText,
+      color: 'text-blue-500 bg-blue-500/10 border-blue-500/20',
+      tag: 'Audit Trail',
+      action: onOpenActivityLog || (() => {}),
+    },
+    {
+      id: 'space-settings',
+      name: isFriends ? 'Squad Settings & Members' : 'Space Settings & Members',
+      desc: isFriends
+        ? 'Squad nickname, custom emoji, member list & invite controls'
+        : 'Change nicknames, anniversary date, avatars, invite links & history controls',
+      category: 'settings' as FeatureCategory,
+      icon: Settings,
+      color: 'text-slate-500 bg-slate-500/10 border-slate-500/20',
+      tag: 'Preferences',
+      action: onOpenSettings || (() => {}),
+    },
+    ...(onOpenQRPairing ? [{
+      id: 'qr-pairing',
+      name: 'Instant QR Code Pairing',
+      desc: 'Show or scan instant cryptographic QR code to link mobile & desktop',
+      category: 'settings' as FeatureCategory,
+      icon: QrCode,
+      color: 'text-violet-500 bg-violet-500/10 border-violet-500/20',
+      tag: 'QR Link',
+      action: onOpenQRPairing,
+    }] : []),
+    ...(onOpenInstallModal ? [{
+      id: 'install-phone-app',
+      name: 'Install Phone App & APK',
+      desc: 'Install directly to Android/iOS home screen or generate standalone APK package',
+      category: 'settings' as FeatureCategory,
+      icon: Smartphone,
+      color: 'text-pink-500 bg-pink-500/10 border-pink-500/20',
+      tag: 'Mobile / APK',
+      action: onOpenInstallModal,
+    }] : []),
+  ];
+
+  // Couple intimacy & romantic features - ONLY for Couple space
+  const coupleExclusiveFeatures: FeatureItem[] = [
     {
       id: 'horizon',
       name: 'Distance Radar & Horizon',
@@ -210,7 +390,7 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
     },
     {
       id: 'care-tracker',
-      name: isFriends ? 'Squad Care & Favors' : 'Care Tracker & Love Coupons',
+      name: 'Care Tracker & Love Coupons',
       desc: 'Redeemable custom coupons, daily check-ins & hug counters',
       category: 'bond' as FeatureCategory,
       icon: Heart,
@@ -238,37 +418,30 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
       tag: 'Locked Future',
       action: onOpenTimeCapsule,
     },
-    {
-      id: 'bucket-list',
-      name: isFriends ? 'Squad Bucket List' : 'Couple Bucket List',
-      desc: 'Shared dreams, travel bucket list, adventures & photo proofs',
-      category: 'bond' as FeatureCategory,
-      icon: Heart,
-      color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
-      tag: 'Dreams & Goals',
-      action: onOpenBucketList,
-    },
-    {
-      id: 'wallpaper',
-      name: 'Chat Wallpaper & Doodles',
-      desc: 'WhatsApp-style romantic doodles, custom glows & wallpapers',
-      category: 'media' as FeatureCategory,
-      icon: Wallpaper,
-      color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
-      tag: 'Customization',
-      action: onOpenWallpaperPicker,
-    },
-    {
-      id: 'theme-picker',
-      name: 'Atmosphere & Color Palettes',
-      desc: 'Switch between 6 living color themes with glowing ambient light',
-      category: 'creative' as FeatureCategory,
-      icon: Sliders,
-      color: 'text-violet-500 bg-violet-500/10 border-violet-500/20',
-      tag: 'Palettes',
-      action: onOpenThemePicker,
-    },
   ];
+
+  // Single exclusive features - ONLY for Single space
+  const singleExclusiveFeatures: FeatureItem[] = onOpenSinglesLounge
+    ? [
+        {
+          id: 'singles-lounge',
+          name: 'Singles Lounge & Spark Hub',
+          desc: 'Register profile, discover singles, send waves, or invite people',
+          category: 'bond' as FeatureCategory,
+          icon: Sparkles,
+          color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
+          tag: 'Community',
+          action: onOpenSinglesLounge,
+          highlight: true,
+        },
+      ]
+    : [];
+
+  const allFeatures: FeatureItem[] = isFriends
+    ? sharedFeatures
+    : isSingle
+    ? [...singleExclusiveFeatures, ...sharedFeatures]
+    : [...sharedFeatures, ...coupleExclusiveFeatures];
 
   const filteredFeatures = allFeatures.filter((item) => {
     const matchesCategory = activeCategory === 'all' || item.category === activeCategory;
@@ -286,15 +459,16 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
     { id: 'games' as FeatureCategory, label: 'Games & Play', count: allFeatures.filter((f) => f.category === 'games').length },
     { id: 'creative' as FeatureCategory, label: 'Creative & Radar', count: allFeatures.filter((f) => f.category === 'creative').length },
     { id: 'bond' as FeatureCategory, label: isFriends ? 'Squad Bond' : 'Love & Bond', count: allFeatures.filter((f) => f.category === 'bond').length },
+    { id: 'settings' as FeatureCategory, label: 'Settings & Privacy', count: allFeatures.filter((f) => f.category === 'settings').length },
   ];
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div
-        className={`relative w-full max-w-4xl max-h-[92vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden transition-colors ${
+        className={`relative w-full max-w-4xl h-[100dvh] sm:h-auto sm:max-h-[92vh] flex flex-col rounded-none sm:rounded-3xl border-0 sm:border shadow-2xl overflow-hidden transition-colors ${
           isDark
             ? 'bg-slate-900 border-slate-800 text-slate-100 shadow-purple-950/20'
             : 'bg-white border-slate-200 text-slate-900 shadow-slate-900/15'
@@ -303,32 +477,46 @@ export const SpaceFeaturesModal: React.FC<SpaceFeaturesModalProps> = ({
       >
         {/* Header Section */}
         <div
-          className={`px-5 sm:px-6 pt-5 pb-4 border-b shrink-0 flex items-center justify-between ${
-            isDark ? 'border-slate-800 bg-slate-900/90' : 'border-slate-100 bg-white/90'
+          className={`px-3 sm:px-6 pt-3 sm:pt-5 pb-3 sm:pb-4 border-b shrink-0 sticky top-0 z-20 flex items-center justify-between gap-2 ${
+            isDark ? 'border-slate-800 bg-slate-900/95 backdrop-blur-md' : 'border-slate-100 bg-white/95 backdrop-blur-md'
           }`}
+          style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0.75rem))' }}
         >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-500 via-pink-500 to-purple-600 flex items-center justify-center text-white shadow-md shadow-pink-500/20">
-              <Sparkles className="w-5 h-5" />
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-back-features-mobile"
+              className={`p-2 -ml-1 rounded-xl transition-colors cursor-pointer flex items-center gap-1 font-bold text-xs sm:hidden shrink-0 ${
+                isDark ? 'hover:bg-slate-800 text-rose-400 active:bg-slate-800' : 'hover:bg-rose-50 text-rose-600 active:bg-rose-100'
+              }`}
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span className="text-xs font-bold">Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-rose-500 via-pink-500 to-purple-600 flex items-center justify-center text-white shadow-md shadow-pink-500/20 shrink-0">
+              <Sliders className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-lg sm:text-xl font-bold font-serif tracking-tight">
-                  All Space Features
+                <h2 className="text-base sm:text-xl font-bold font-serif tracking-tight truncate">
+                  Feature Settings
                 </h2>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-600 dark:text-pink-400 border border-pink-500/20">
-                  {isFriends ? 'Squad Suite' : 'Haven Suite'}
+                <span className="hidden xs:inline-block text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-600 dark:text-pink-400 border border-pink-500/20 shrink-0">
+                  {isFriends ? 'Squad Hub' : 'Haven Suite'}
                 </span>
               </div>
-              <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                16 integrated activities, shared audio, multiplayer games & intimacy tools
+              <p className={`text-[11px] sm:text-xs truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                All space features, shared media, mini-games & controls
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className={`p-2 rounded-xl transition-colors cursor-pointer ${
+            className={`p-2 rounded-xl transition-colors cursor-pointer shrink-0 ${
               isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-500 hover:text-slate-900'
             }`}
             title="Close Features"

@@ -428,7 +428,7 @@ export const GentleClosureModal: React.FC<GentleClosureModalProps> = ({
                       {copied ? (
                         <>
                           <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Copied for SMS / WhatsApp!</span>
+                          <span>Copied for SMS / Haven!</span>
                         </>
                       ) : (
                         <>

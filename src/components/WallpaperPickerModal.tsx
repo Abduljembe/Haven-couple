@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   X,
+  ArrowLeft,
   Image as ImageIcon,
   Check,
   Sparkles,
@@ -123,30 +124,41 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
   const previewPatternUri = coloredSvg ? `url("data:image/svg+xml,${encodeURIComponent(coloredSvg.trim())}")` : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in">
       <div
         id="wallpaper-picker-dialog"
-        className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-200"
+        className="w-full max-w-2xl bg-white rounded-none sm:rounded-3xl shadow-2xl border-0 sm:border border-slate-100 overflow-hidden flex flex-col h-[100dvh] sm:h-auto sm:max-h-[92vh] animate-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-700 px-6 py-4 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/15 backdrop-blur-xs flex items-center justify-center shadow-inner">
-              <ImageIcon className="w-5 h-5 text-emerald-200" />
+        <div className="bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-700 px-3 sm:px-6 py-3 sm:py-4 text-white flex items-center justify-between shrink-0 sticky top-0 z-20">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Haven-Style Mobile Back Button */}
+            <button
+              onClick={onClose}
+              id="btn-wallpaper-mobile-back"
+              className="p-1.5 -ml-1 text-emerald-100 hover:bg-white/20 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0 sm:hidden"
+              title="Back to Chat"
+            >
+              <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-white/15 backdrop-blur-xs flex items-center justify-center shadow-inner shrink-0">
+              <ImageIcon className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-200" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-bold">Chat Wallpaper & Ambiance</h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/20 text-emerald-100 border border-emerald-300/30">
-                  WhatsApp Style
+                <h2 className="text-sm sm:text-lg font-bold truncate">Wallpaper & Ambiance</h2>
+                <span className="hidden xs:inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/20 text-emerald-100 border border-emerald-300/30 shrink-0">
+                  Haven
                 </span>
               </div>
-              <p className="text-xs text-white/80">Choose WhatsApp doodles, romantic couple patterns, or personal photos</p>
+              <p className="text-[11px] sm:text-xs text-white/80 truncate">Doodles, patterns, or photos</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            className="p-2 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
             title="Close"
           >
             <X className="w-5 h-5" />
@@ -199,7 +211,7 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
               {/* Sample Incoming Partner Bubble */}
               <div className="relative z-10 self-start max-w-[80%] bg-white rounded-2xl rounded-tl-xs px-3.5 py-2 shadow-md border border-black/5 text-xs text-slate-800 animate-in fade-in">
                 <p className="font-semibold text-[10px] text-emerald-600 mb-0.5">Partner</p>
-                <p>Do you like this chat wallpaper? Feels just like WhatsApp! 🥰</p>
+                <p>Do you like this chat wallpaper? Feels just like Haven! 🥰</p>
                 <div className="flex items-center justify-end gap-1 mt-1 text-[9px] text-slate-400">
                   <span>10:42 AM</span>
                   <Lock className="w-2.5 h-2.5 text-emerald-500" />
@@ -221,7 +233,7 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
             {[
               { id: 'all', label: 'All Wallpapers' },
-              { id: 'whatsapp', label: 'WhatsApp Classic' },
+              { id: 'whatsapp', label: 'Haven Classic' },
               { id: 'romantic', label: 'Couple & Love 💕' },
               { id: 'nature', label: 'Nature & Zen 🌿' },
               { id: 'dark', label: 'Dark Mode 🌙' },
@@ -335,7 +347,7 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
             </div>
           </div>
 
-          {/* Sliders & Interactive Settings (WhatsApp Style) */}
+          {/* Sliders & Interactive Settings (Haven Style) */}
           <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
             <div className="flex items-center gap-2 pb-1 border-b border-slate-100 text-xs font-bold text-slate-800">
               <Sliders className="w-4 h-4 text-emerald-600" />
@@ -361,7 +373,7 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
                   className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400">
-                  <span>Subtle (WhatsApp default)</span>
+                  <span>Subtle (Haven default)</span>
                   <span>Prominent</span>
                 </div>
               </div>
@@ -456,7 +468,7 @@ export const WallpaperPickerModal: React.FC<WallpaperPickerModalProps> = ({
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 rounded-xl hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset to WhatsApp Classic</span>
+            <span>Reset to Haven Classic</span>
           </button>
 
           <button
