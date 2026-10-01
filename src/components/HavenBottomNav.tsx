@@ -170,7 +170,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
       {/* Haven Bottom Navigation Bar */}
       <nav
         id="haven-bottom-nav"
-        className={`sm:hidden shrink-0 z-30 w-full border-t flex items-center justify-around px-2 py-1.5 transition-colors duration-200 ${
+        className={`sm:hidden shrink-0 z-30 w-full border-t flex items-center justify-between px-1 py-1 transition-colors duration-200 ${
           isDark
             ? 'bg-slate-950/95 border-slate-800 text-slate-400'
             : 'bg-white/95 border-slate-200/90 text-slate-500'
@@ -181,7 +181,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
         <button
           type="button"
           onClick={() => handleTabClick('chat')}
-          className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer relative ${
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer relative ${
             activeTab === 'chat'
               ? isDark
                 ? 'text-rose-400 font-bold'
@@ -197,30 +197,30 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
               </span>
             )}
           </div>
-          <span className="text-[10px] mt-0.5 tracking-tight">Chats</span>
+          <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Chats</span>
         </button>
 
         {/* Calls Tab */}
         <button
           type="button"
           onClick={() => handleTabClick('calls')}
-          className="flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
+          className="flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
         >
           <Phone className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5 tracking-tight">Calls</span>
+          <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Calls</span>
         </button>
 
         {/* Cinema / Watch Party Tab */}
         <button
           type="button"
           onClick={() => handleTabClick('cinema')}
-          className="flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
+          className="flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
         >
           <div className="relative">
             <Tv className="w-5 h-5 text-rose-500" />
             <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
           </div>
-          <span className="text-[10px] mt-0.5 tracking-tight">Cinema</span>
+          <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Cinema</span>
         </button>
 
         {/* Spotify Music Lounge Tab */}
@@ -229,7 +229,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
             type="button"
             id="btn-haven-bottom-music"
             onClick={() => handleTabClick('music')}
-            className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer ${
+            className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer ${
               isMusicPlaying
                 ? 'text-[#1ed760] font-bold'
                 : 'hover:text-slate-900 dark:hover:text-slate-200 font-medium'
@@ -242,7 +242,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
                 <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-[#1DB954] animate-ping" />
               )}
             </div>
-            <span className="text-[10px] mt-0.5 tracking-tight">Spotify</span>
+            <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Music</span>
           </button>
         )}
 
@@ -252,7 +252,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
             type="button"
             id="btn-haven-bottom-status"
             onClick={() => handleTabClick('status')}
-            className={`flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium relative ${
+            className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium relative ${
               activeTab === 'status' ? 'text-[#00a884]' : isDark ? 'text-slate-400' : 'text-slate-500'
             }`}
           >
@@ -262,7 +262,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
                 <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[#00a884] ring-2 ring-white dark:ring-[#111b21] animate-pulse" />
               )}
             </div>
-            <span className="text-[10px] mt-0.5 tracking-tight">Status</span>
+            <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Status</span>
           </button>
         )}
 
@@ -271,10 +271,10 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
           <button
             type="button"
             onClick={() => handleTabClick('singles')}
-            className="flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
+            className="flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
           >
             <Sparkles className="w-5 h-5 text-amber-500" />
-            <span className="text-[10px] mt-0.5 tracking-tight">Singles</span>
+            <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Singles</span>
           </button>
         )}
 
@@ -283,7 +283,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
           type="button"
           id="btn-haven-bottom-features"
           onClick={() => handleTabClick('features')}
-          className="flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
+          className="flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 font-medium"
         >
           <div className="relative">
             <Sliders className="w-5 h-5 text-indigo-500" />
@@ -291,7 +291,7 @@ export const HavenBottomNav: React.FC<HavenBottomNavProps> = ({
               17
             </span>
           </div>
-          <span className="text-[10px] mt-0.5 tracking-tight">Features</span>
+          <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">Features</span>
         </button>
       </nav>
     </>

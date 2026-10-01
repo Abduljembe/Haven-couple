@@ -458,7 +458,7 @@ export const PolaroidVaultModal: React.FC<PolaroidVaultModalProps> = ({
                               e.stopPropagation();
                               onDeletePhoto(p.id);
                             }}
-                            className="absolute top-2 right-2 p-1.5 rounded-lg bg-red-500/90 text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10"
+                            className="absolute top-2 right-2 p-1.5 rounded-lg bg-red-500/90 text-white opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer z-10"
                             title="Delete photo"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

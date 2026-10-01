@@ -1320,7 +1320,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
                 )}
 
-                {/* Quick Reply Button on Hover */}
+                {/* Quick Reply Button on Hover and Mobile Tap */}
                 {!msg.isDeleted && (
                   <button
                     type="button"
@@ -1330,7 +1330,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       textInputRef.current?.focus();
                       triggerHaptic('light');
                     }}
-                    className={`absolute top-1.5 ${isMe ? 'left-7' : 'right-7'} p-1 rounded-full bg-black/25 hover:bg-black/45 text-white/90 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10`}
+                    className={`absolute top-1.5 ${isMe ? 'left-7' : 'right-7'} p-1 rounded-full bg-black/25 hover:bg-black/45 text-white/90 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 hover:!opacity-100 transition-opacity cursor-pointer z-10`}
                     title="Reply to message"
                   >
                     <Reply className="w-3.5 h-3.5" />
@@ -1345,9 +1345,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     setActiveDropdownMsgId(isDropdownOpen ? null : msg.id);
                     setHighlightedMessageId(msg.id);
                   }}
-                  className={`absolute top-1.5 ${isMe ? 'left-1.5' : 'right-1.5'} p-1 rounded-full bg-black/25 hover:bg-black/45 text-white/90 opacity-0 group-hover:opacity-100 ${
+                  className={`absolute top-1.5 ${isMe ? 'left-1.5' : 'right-1.5'} p-1 rounded-full bg-black/25 hover:bg-black/45 text-white/90 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 ${
                     isDropdownOpen || isHighlighted ? '!opacity-100' : ''
-                  } transition-opacity cursor-pointer z-10`}
+                  } hover:!opacity-100 transition-opacity cursor-pointer z-10`}
                   title="Message options"
                 >
                   <ChevronDown className="w-3.5 h-3.5" />
@@ -1594,7 +1594,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Meta info: Time + Lock Icon */}
                   <div
                     className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${
-                      isMe ? 'text-rose-100' : 'text-slate-400'
+                      isMe ? 'text-white/80' : isDark ? 'text-slate-400' : 'text-slate-500'
                     }`}
                   >
                     <Lock className="w-2.5 h-2.5 opacity-70" title="End-to-End Encrypted" />
@@ -1602,7 +1602,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     {msg.isEdited && !msg.isDeleted && (
                       <span className="text-[9px] italic font-medium opacity-90 ml-0.5">• Edited</span>
                     )}
-                    {isMe && !msg.isDeleted && <CheckCheck className="w-3 h-3 text-rose-200" />}
+                    {isMe && !msg.isDeleted && <CheckCheck className="w-3 h-3 text-white/90" />}
                   </div>
                 </div>
 
@@ -1617,8 +1617,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           onClick={() => onSendReaction(msg.id, emoji)}
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border shadow-xs transition-colors ${
                             userIds.includes(currentUserId)
-                              ? 'bg-rose-100 border-rose-300 text-rose-700 font-bold'
-                              : 'bg-white border-slate-200 text-slate-700'
+                              ? 'bg-rose-100 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold'
+                              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
                           }`}
                         >
                           <span>{emoji}</span>
@@ -1629,11 +1629,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
                 )}
 
-                {/* Quick Hover Reaction Bar */}
+                {/* Quick Reaction Bar (Mobile Tap or Desktop Hover) */}
                 <div
-                  className={`absolute -top-7 opacity-0 group-hover:opacity-100 transition-opacity bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md rounded-full px-2 py-0.5 flex items-center gap-1 z-10 ${
-                    isMe ? 'right-0' : 'left-0'
-                  }`}
+                  className={`absolute -top-7 transition-opacity bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md rounded-full px-2 py-0.5 flex items-center gap-1 z-10 ${
+                    isHighlighted || isDropdownOpen
+                      ? 'opacity-100 pointer-events-auto'
+                      : 'opacity-0 sm:group-hover:opacity-100 pointer-events-none sm:pointer-events-auto'
+                  } ${isMe ? 'right-0' : 'left-0'}`}
                 >
                   {!msg.isDeleted && ['❤️', '🥰', '💋', '🔥', '🥺', '😂'].map((emoji) => (
                     <button
@@ -1969,23 +1971,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {isRecording ? (
           /* Live Voice Recording UI */
-          <div className="flex items-center justify-between p-3 bg-rose-50 border border-rose-200 rounded-2xl animate-pulse">
+          <div className="flex items-center justify-between p-3 bg-rose-50 dark:bg-rose-950/70 border border-rose-200 dark:border-rose-800 rounded-2xl animate-pulse">
             <div className="flex items-center gap-3">
               <span className="w-3.5 h-3.5 rounded-full bg-rose-600 animate-ping" />
-              <span className="text-sm font-bold text-rose-800">
+              <span className="text-sm font-bold text-rose-800 dark:text-rose-200">
                 Recording encrypted audio... {formatRecordTime(recordDuration)}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={cancelRecording}
-                className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white rounded-xl border border-slate-200"
+                className="px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={stopRecording}
-                className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md flex items-center gap-1"
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md flex items-center gap-1 transition-colors"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Send Note</span>
@@ -2296,7 +2298,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   id="btn-record-audio"
                   type="button"
                   onClick={startRecording}
-                  className="p-2.5 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-xl transition-colors cursor-pointer"
+                  className="p-2.5 bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 rounded-xl transition-colors cursor-pointer"
                   title="Hold or click to record encrypted voice note"
                 >
                   <Mic className="w-5 h-5" />

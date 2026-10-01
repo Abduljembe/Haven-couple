@@ -50,7 +50,7 @@ import {
   playSoundboardById,
   unlockAudioContext,
 } from './utils/sounds';
-import { WebRTCManager } from './utils/webrtc';
+import { WebRTCManager, fetchFreshIceServers } from './utils/webrtc';
 import { SquadCallManager } from './utils/squadCallManager';
 import { Music, Play, Pause, Heart, X } from 'lucide-react';
 import { SetupSpaceModal } from './components/SetupSpaceModal';
@@ -494,6 +494,8 @@ export default function App() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [partnerIsMuted, setPartnerIsMuted] = useState(false);
+  const [partnerIsVideoOff, setPartnerIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isAudioCallMinimized, setIsAudioCallMinimized] = useState(false);
   const [isSquadCallMinimized, setIsSquadCallMinimized] = useState(false);
@@ -1064,6 +1066,11 @@ export default function App() {
     return mgr;
   }, [config, isNoiseCancellationActive, isEchoSuppressionActive]);
 
+  // Preload high-availability STUN & TURN ICE relays for cross-network WebRTC connectivity
+  useEffect(() => {
+    fetchFreshIceServers().catch(() => {});
+  }, []);
+
   // Socket Connection & Real-Time Events
   useEffect(() => {
     if (!config || !cryptoKey) return;
@@ -1592,6 +1599,18 @@ export default function App() {
       setCallStatus('idle');
       setActiveCallType(null);
       setIncomingCallData(null);
+      setPartnerIsMuted(false);
+      setPartnerIsVideoOff(false);
+    });
+
+    // Call Media State: Partner toggled mute or camera
+    socket.on('call-media-state', (data: { isMuted?: boolean; isVideoOff?: boolean }) => {
+      if (typeof data.isMuted === 'boolean') {
+        setPartnerIsMuted(data.isMuted);
+      }
+      if (typeof data.isVideoOff === 'boolean') {
+        setPartnerIsVideoOff(data.isVideoOff);
+      }
     });
 
     // Space Capacity Error (Maximum 5 members in Squad space)
@@ -2587,6 +2606,8 @@ export default function App() {
     setIncomingCallData(null);
     setIsMuted(false);
     setIsVideoOff(false);
+    setPartnerIsMuted(false);
+    setPartnerIsVideoOff(false);
     setIsScreenSharing(false);
     setIsAudioCallMinimized(false);
   };
@@ -2713,16 +2734,48 @@ export default function App() {
 
   // Calling Media Controls
   const handleToggleMute = () => {
+    let nextMuted = !isMuted;
     if (webrtcRef.current) {
-      const muted = webrtcRef.current.toggleMuteAudio();
-      setIsMuted(muted);
+      nextMuted = webrtcRef.current.toggleMuteAudio();
+    }
+    if (squadCallRef.current) {
+      nextMuted = squadCallRef.current.toggleMuteAudio();
+    }
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !nextMuted;
+      });
+    }
+    setIsMuted(nextMuted);
+    if (socketRef.current && config) {
+      socketRef.current.emit('call-media-state', {
+        roomId: config.roomId,
+        isMuted: nextMuted,
+        targetSocketId: currentCallTargetSocketIdRef.current || undefined,
+      });
     }
   };
 
   const handleToggleVideo = () => {
+    let nextOff = !isVideoOff;
     if (webrtcRef.current) {
-      const off = webrtcRef.current.toggleMuteVideo();
-      setIsVideoOff(off);
+      nextOff = webrtcRef.current.toggleMuteVideo();
+    }
+    if (squadCallRef.current) {
+      nextOff = squadCallRef.current.toggleMuteVideo();
+    }
+    if (localStream) {
+      localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !nextOff;
+      });
+    }
+    setIsVideoOff(nextOff);
+    if (socketRef.current && config) {
+      socketRef.current.emit('call-media-state', {
+        roomId: config.roomId,
+        isVideoOff: nextOff,
+        targetSocketId: currentCallTargetSocketIdRef.current || undefined,
+      });
     }
   };
 
@@ -3625,6 +3678,7 @@ export default function App() {
           onToggleNoiseCancellation={handleToggleNoiseCancellation}
           isEchoSuppressionActive={isEchoSuppressionActive}
           onToggleEchoSuppression={handleToggleEchoSuppression}
+          partnerIsMuted={partnerIsMuted}
           getNetworkStats={() =>
             webrtcRef.current
               ? webrtcRef.current.getNetworkStats()
@@ -3662,6 +3716,8 @@ export default function App() {
           onToggleNoiseCancellation={handleToggleNoiseCancellation}
           isEchoSuppressionActive={isEchoSuppressionActive}
           onToggleEchoSuppression={handleToggleEchoSuppression}
+          partnerIsMuted={partnerIsMuted}
+          partnerIsVideoOff={partnerIsVideoOff}
           getNetworkStats={() =>
             webrtcRef.current
               ? webrtcRef.current.getNetworkStats()

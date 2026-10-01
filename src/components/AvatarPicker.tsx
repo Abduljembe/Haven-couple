@@ -101,10 +101,13 @@ export const AvatarPicker: React.FC<AvatarPickerProps> = ({
             className="w-full h-full object-cover group-hover:scale-105 transition-transform"
           />
 
-          {/* Hover Overlay */}
+          {/* Change Avatar Overlay / Indicator */}
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center text-white transition-opacity">
             <Camera className="w-5 h-5 mb-0.5" />
             <span className="text-[9px] font-bold uppercase tracking-wider">Change</span>
+          </div>
+          <div className="sm:hidden absolute bottom-1 right-1 p-1 bg-black/70 rounded-full text-white">
+            <Camera className="w-3 h-3" />
           </div>
 
           {isProcessing && (

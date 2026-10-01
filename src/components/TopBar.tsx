@@ -201,7 +201,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     >
       <div className="w-full px-1 sm:px-3 flex items-center justify-between gap-2">
         {/* Left: Couple / Squad Avatars & Status */}
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 shrink-0 max-w-[55%] sm:max-w-[42%]">
           <div className="relative shrink-0 flex items-center">
             {isFriends ? (
               /* Friends Squad Avatar Stack */

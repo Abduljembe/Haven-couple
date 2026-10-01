@@ -322,6 +322,9 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                 autoPlay
                 playsInline
                 muted
+                onLoadedMetadata={() => setIsCameraReady(true)}
+                onLoadedData={() => setIsCameraReady(true)}
+                onPlaying={() => setIsCameraReady(true)}
                 className={`w-full h-full object-cover max-h-[60vh] transition-opacity duration-300 ${
                   isCameraReady ? 'opacity-100' : 'opacity-0'
                 } ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}

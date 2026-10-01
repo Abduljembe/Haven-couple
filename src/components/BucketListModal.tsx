@@ -303,7 +303,8 @@ export const BucketListModal: React.FC<BucketListModalProps> = ({
 
                   <button
                     onClick={() => onDeleteItem(item.id)}
-                    className="p-1.5 text-slate-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded-lg hover:bg-slate-800"
+                    className="p-1.5 text-slate-500 hover:text-rose-400 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer rounded-lg hover:bg-slate-800"
+                    title="Delete item"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

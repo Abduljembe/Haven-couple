@@ -389,12 +389,12 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
               ❤️
             </button>
 
-            {/* Active Noise Cancellation Toggle in Mini Bar */}
+            {/* Active Noise Cancellation Toggle in Mini Bar (Desktop/Tablet) */}
             <button
               id="btn-mini-toggle-audio-call-anc"
               type="button"
               onClick={handleToggleNC}
-              className={`p-2 rounded-full transition cursor-pointer ${
+              className={`hidden md:inline-flex p-2 rounded-full transition cursor-pointer ${
                 isNC
                   ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/50'
                   : 'bg-[#202c33] text-slate-400 hover:bg-[#2a3942]'
@@ -404,12 +404,12 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
               <Sparkles className={`w-3.5 h-3.5 ${isNC ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
             </button>
 
-            {/* Echo Suppression Toggle in Mini Bar */}
+            {/* Echo Suppression Toggle in Mini Bar (Desktop/Tablet) */}
             <button
               id="btn-mini-toggle-audio-call-aec"
               type="button"
               onClick={handleToggleEC}
-              className={`p-2 rounded-full transition cursor-pointer ${
+              className={`hidden md:inline-flex p-2 rounded-full transition cursor-pointer ${
                 isEC
                   ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-500/50'
                   : 'bg-[#202c33] text-slate-400 hover:bg-[#2a3942]'
@@ -419,7 +419,7 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
               <Waves className={`w-3.5 h-3.5 ${isEC ? 'text-cyan-400 animate-pulse' : 'text-slate-400'}`} />
             </button>
 
-            {/* Mute Mic */}
+            {/* Mute Mic - Always visible on both mobile and computer */}
             <button
               type="button"
               onClick={onToggleMute}
@@ -433,11 +433,11 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
               {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Speaker Mute */}
+            {/* Speaker Mute (Desktop/Tablet) */}
             <button
               type="button"
               onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
-              className={`p-2 rounded-full transition cursor-pointer ${
+              className={`hidden sm:inline-flex p-2 rounded-full transition cursor-pointer ${
                 isSpeakerMuted
                   ? 'bg-rose-600 text-white'
                   : 'bg-[#202c33] text-[#e9edef] hover:bg-[#2a3942]'
@@ -447,12 +447,12 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
               {isSpeakerMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Play Games Button in Mini Bar */}
+            {/* Play Games Button in Mini Bar (Desktop/Tablet) */}
             {onOpenGames && (
               <button
                 type="button"
                 onClick={onOpenGames}
-                className="p-2 rounded-full bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 transition cursor-pointer"
+                className="hidden md:inline-flex p-2 rounded-full bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 transition cursor-pointer"
                 title="Play couple games while talking"
               >
                 <Gamepad2 className="w-3.5 h-3.5 text-rose-400" />
@@ -475,7 +475,7 @@ export const AudioCallModal: React.FC<AudioCallModalProps> = ({
             <button
               type="button"
               onClick={onEndCall}
-              className="p-2 rounded-full bg-[#ea0038] hover:bg-[#d00030] text-white transition cursor-pointer shadow-md"
+              className="p-2 rounded-full bg-[#ea0038] hover:bg-[#d00030] text-white transition cursor-pointer shadow-md shrink-0"
               title="End Call"
             >
               <PhoneOff className="w-3.5 h-3.5" />

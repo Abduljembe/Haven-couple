@@ -2042,8 +2042,8 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />
 
-                  {/* Hover Center Play Button Overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
+                  {/* Play Button Overlay (Visible on Touch, High-Intent on Hover) */}
+                  <div className="absolute inset-0 flex items-center justify-center opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
                     <div className={`px-3 py-1.5 rounded-full ${isSeries ? 'bg-gradient-to-r from-purple-600 to-pink-600' : 'bg-rose-600/90 hover:bg-rose-500'} text-white flex items-center gap-1.5 shadow-xl shadow-rose-600/40 transform scale-90 group-hover:scale-100 transition-transform text-xs font-bold`}>
                       {isSeries ? (
                         <>
@@ -2500,7 +2500,7 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
               }`}
             >
           {/* Quick Floating Fullscreen / Exit Hint Pill in Top Corner */}
-          <div className="absolute top-4 right-4 z-20 opacity-0 group-hover/player:opacity-100 transition-opacity duration-200">
+          <div className="absolute top-4 right-4 z-20 opacity-90 sm:opacity-0 sm:group-hover/player:opacity-100 transition-opacity duration-200">
             <button
               onClick={(e) => {
                 e.stopPropagation();

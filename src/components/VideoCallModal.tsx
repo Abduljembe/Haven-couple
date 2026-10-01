@@ -554,7 +554,10 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
       )}
 
       {/* Remote Video Stream (Main Fullscreen) */}
-      <div className="relative w-full h-full flex items-center justify-center bg-[#0b141a]">
+      <div 
+        className="relative w-full h-full flex items-center justify-center bg-[#0b141a] cursor-pointer"
+        onClick={() => setShowControls((prev) => !prev)}
+      >
         <video
           ref={(el) => {
             remoteVideoRef.current = el;
@@ -566,7 +569,7 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
           autoPlay
           playsInline
           className={`w-full h-full object-cover transition-opacity duration-300 ${
-            hasRemoteVideoTrack ? 'opacity-100 relative z-10' : 'opacity-0 absolute'
+            hasRemoteVideoTrack && !partnerIsVideoOff ? 'opacity-100 relative z-10' : 'opacity-0 absolute pointer-events-none'
           }`}
           onLoadedMetadata={() => {
             setHasRemoteVideoTrack(true);
@@ -584,11 +587,16 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
             setHasRemoteVideoTrack(true);
             attemptPlayMedia();
           }}
+          onTimeUpdate={() => {
+            if (!hasRemoteVideoTrack) {
+              setHasRemoteVideoTrack(true);
+            }
+          }}
         />
 
-        {/* Haven Avatar Fallback when video stream is loading or disabled */}
-        {!hasRemoteVideoTrack && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#111b21] text-[#e9edef] z-0 p-6">
+        {/* Haven Avatar Fallback when video stream is loading, disabled or partner camera off */}
+        {(!hasRemoteVideoTrack || partnerIsVideoOff) && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#111b21] text-[#e9edef] z-0 p-6 select-none pointer-events-none">
             <div className="relative mb-6">
               <div className="w-32 h-32 sm:w-36 sm:h-36 rounded-full overflow-hidden border-4 border-[#00a884] shadow-2xl bg-[#202c33]">
                 <img
@@ -600,17 +608,31 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
                   }}
                 />
               </div>
-              <div className="absolute -bottom-1 -right-1 w-9 h-9 rounded-full bg-[#00a884] border-2 border-[#111b21] flex items-center justify-center text-white shadow-md">
-                <Video className="w-4 h-4 text-white" />
+              <div className={`absolute -bottom-1 -right-1 w-9 h-9 rounded-full ${
+                partnerIsVideoOff ? 'bg-amber-500' : 'bg-[#00a884]'
+              } border-2 border-[#111b21] flex items-center justify-center text-white shadow-md`}>
+                {partnerIsVideoOff ? (
+                  <VideoOff className="w-4 h-4 text-white" />
+                ) : (
+                  <Video className="w-4 h-4 text-white" />
+                )}
               </div>
             </div>
 
             <h3 className="text-2xl font-semibold text-[#e9edef] tracking-tight">{partnerName}</h3>
 
             <div className="flex items-center gap-2 mt-2 px-3 py-1 rounded-full bg-[#202c33] border border-[#222e35] text-xs">
-              <span className={`w-2 h-2 rounded-full ${callStatus === 'connected' ? 'bg-[#00a884]' : 'bg-[#eab308] animate-ping'}`} />
+              <span className={`w-2 h-2 rounded-full ${
+                partnerIsVideoOff
+                  ? 'bg-amber-400'
+                  : callStatus === 'connected'
+                  ? 'bg-[#00a884]'
+                  : 'bg-[#eab308] animate-ping'
+              }`} />
               <span className="text-[#8696a0]">
-                {callStatus === 'connected'
+                {partnerIsVideoOff
+                  ? 'Partner turned off camera • Audio is live'
+                  : callStatus === 'connected'
                   ? hasRemoteAudioTrack
                     ? 'Connected • Audio Live (Video Loading...)'
                     : 'Connected • Establishing Global Stream...'
@@ -620,7 +642,7 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
               </span>
             </div>
 
-            {callStatus === 'connected' && !hasRemoteVideoTrack && (
+            {callStatus === 'connected' && !hasRemoteVideoTrack && !partnerIsVideoOff && (
               <p className="text-xs text-[#8696a0] max-w-sm text-center mt-3 leading-relaxed">
                 If the video takes a moment across borders, voice is still live. Tap <strong className="text-[#00a884]">Reconnect</strong> below to refresh the route.
               </p>
@@ -650,8 +672,9 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
 
         {/* Top Info Bar (Haven Dark Style) */}
         <div
+          onClick={(e) => e.stopPropagation()}
           className={`absolute top-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-between z-20 bg-gradient-to-b from-black/80 via-black/40 to-transparent transition-opacity duration-300 ${
-            showControls ? 'opacity-100' : 'opacity-0 hover:opacity-100'
+            showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none sm:hover:opacity-100 sm:hover:pointer-events-auto'
           }`}
         >
           <div className="flex items-center gap-3">
@@ -841,11 +864,14 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
 
         {/* Picture-in-Picture Local Video (Self Preview) */}
         <div
-          onClick={() => setIsPipTopLeft(!isPipTopLeft)}
-          className={`absolute z-30 transition-all duration-300 cursor-pointer shadow-2xl rounded-2xl overflow-hidden border-2 border-[#00a884]/80 bg-[#111b21] w-28 h-40 sm:w-36 sm:h-52 ${
-            isPipTopLeft ? 'top-20 left-4' : 'top-20 right-4 sm:bottom-28 sm:top-auto'
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsPipTopLeft(!isPipTopLeft);
+          }}
+          className={`absolute z-30 transition-all duration-300 cursor-pointer shadow-2xl rounded-2xl overflow-hidden border-2 border-[#00a884]/80 bg-[#111b21] w-24 h-36 sm:w-36 sm:h-52 ${
+            isPipTopLeft ? 'top-20 left-3 sm:top-24 sm:left-6' : 'bottom-28 right-3 sm:bottom-28 sm:right-6 sm:top-auto'
           }`}
-          title="Click to toggle position"
+          title="Tap to toggle position"
         >
           {isVideoOff ? (
             <div className="w-full h-full flex flex-col items-center justify-center bg-[#202c33] text-[#8696a0] p-2 text-center">
@@ -876,9 +902,12 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         </div>
 
         {/* Floating Love Bursts Quick Reactions */}
-        <div className={`absolute bottom-28 sm:bottom-32 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#202c33]/90 backdrop-blur-md border border-[#222e35] shadow-lg transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 hover:opacity-100'
-        }`}>
+        <div 
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute bottom-28 sm:bottom-32 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-full bg-[#202c33]/90 backdrop-blur-md border border-[#222e35] shadow-lg transition-opacity duration-300 ${
+            showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none sm:hover:opacity-100 sm:hover:pointer-events-auto'
+          }`}
+        >
           {['❤️', '💖', '🥰', '😘', '🔥', '👏', '👋'].map((emoji) => (
             <button
               key={emoji}
@@ -892,9 +921,12 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
         </div>
 
         {/* Bottom Call Controls Bar (Haven Call UI) */}
-        <div className={`absolute bottom-0 left-0 right-0 p-6 flex items-center justify-center gap-3 sm:gap-4 z-20 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 hover:opacity-100'
-        }`}>
+        <div 
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute bottom-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-center gap-2.5 sm:gap-4 z-20 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-opacity duration-300 ${
+            showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none sm:hover:opacity-100 sm:hover:pointer-events-auto'
+          }`}
+        >
           {/* Mute Audio */}
           <button
             id="btn-toggle-call-mute"
