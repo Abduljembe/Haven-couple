@@ -13,45 +13,20 @@ import {
 } from './audioProcessor';
 
 export const DEFAULT_RTC_ICE_SERVERS: RTCIceServer[] = [
-  // Google Global Anycast STUN (Ports 19302 & 3478)
+  // Google Global Anycast STUN fleet (Ports 19302 & 3478)
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
-  // Cloudflare STUN (Worldwide edge, Port 3478)
+  // Cloudflare Worldwide Anycast Edge STUN (Port 3478)
   { urls: 'stun:stun.cloudflare.com:3478' },
-  // Nextcloud & European STUN (Port 443 & 3478)
-  { urls: 'stun:stun.nextcloud.com:443' },
-  { urls: 'stun:stun.nextcloud.com:3478' },
-  // High-Performance Worldwide OpenRelay TURN & TURNS Servers (Port 80 & 443, UDP & TCP)
-  // Essential for NAT traversal, symmetric NAT, 4G/5G mobile, and cross-Wi-Fi connections
-  {
-    urls: [
-      'turn:standard.relay.metered.ca:80',
-      'turn:standard.relay.metered.ca:80?transport=tcp',
-      'turn:standard.relay.metered.ca:443',
-      'turn:standard.relay.metered.ca:443?transport=tcp',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: [
-      'turns:standard.relay.metered.ca:443?transport=tcp',
-      'turns:standard.relay.metered.ca:443',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
+  // Twilio Global STUN (Anycast Port 3478)
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  // Mozilla Global STUN
+  { urls: 'stun:stun.services.mozilla.com:3478' },
+  // Sipgate Anycast STUN
+  { urls: 'stun:stun.sipgate.net:3478' },
 ];
 
 export const DEFAULT_STUN_SERVERS = DEFAULT_RTC_ICE_SERVERS;
@@ -61,7 +36,7 @@ export const GLOBAL_RTC_CONFIG: RTCConfiguration = {
   iceTransportPolicy: 'all',
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
-  iceCandidatePoolSize: 2, // Pre-gather candidates so cross-network media connects instantly
+  iceCandidatePoolSize: 0, // No pre-pooling: ensures clean SDP ufrag binding without mobile candidate mismatch
 };
 
 // Cached dynamic ICE servers if fetched from backend
@@ -81,13 +56,14 @@ export function getCustomUserIceServers(): RTCIceServer[] {
   return [];
 }
 
-export async function fetchFreshIceServers(): Promise<RTCIceServer[]> {
+export async function fetchFreshIceServers(roomId?: string, forceRefresh = false): Promise<RTCIceServer[]> {
   const custom = getCustomUserIceServers();
-  if (dynamicIceServers && dynamicIceServers.length > 0) {
+  if (!forceRefresh && dynamicIceServers && dynamicIceServers.length > 0) {
     return [...custom, ...dynamicIceServers];
   }
   try {
-    const res = await fetch('/api/webrtc/ice-servers');
+    const url = roomId ? `/api/webrtc/ice-servers?roomId=${encodeURIComponent(roomId)}` : '/api/webrtc/ice-servers';
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
@@ -98,7 +74,7 @@ export async function fetchFreshIceServers(): Promise<RTCIceServer[]> {
   } catch (err) {
     console.warn('Using built-in global ICE servers fallback:', err);
   }
-  return [...custom, ...(GLOBAL_RTC_CONFIG.iceServers || DEFAULT_RTC_ICE_SERVERS)];
+  return [...custom, ...(dynamicIceServers || GLOBAL_RTC_CONFIG.iceServers || DEFAULT_RTC_ICE_SERVERS)];
 }
 
 // Immediately trigger pre-fetch on module load so ICE servers are cached before call initiates
@@ -138,6 +114,7 @@ export class WebRTCManager {
   private lastStatsTimestamp = 0;
   private callType: 'audio' | 'video' = 'audio';
   private isReady = false;
+  private isInitiator = false;
   private isAudioMuted = false;
   private isVideoMuted = false;
   private noiseFilterPipeline: StudioNoiseFilterPipeline | null = null;
@@ -510,8 +487,12 @@ export class WebRTCManager {
           }
           setTimeout(() => {
             if (this.peerConnection && (this.peerConnection.connectionState === 'failed' || this.peerConnection.connectionState === 'disconnected')) {
-              console.warn('[WebRTC] Connection failed, attempting automatic ICE restart...');
-              this.restartIce().catch(() => {});
+              if (this.isInitiator) {
+                console.warn('[WebRTC] Connection failed, initiator attempting automatic ICE restart...');
+                this.restartIce().catch(() => {});
+              } else {
+                console.warn('[WebRTC] Connection failed, waiting for initiator ICE restart...');
+              }
             }
           }, 1500);
         }
@@ -528,8 +509,8 @@ export class WebRTCManager {
           if (this.handlers.onReconnecting) {
             this.handlers.onReconnecting();
           }
-          if (iceState === 'failed') {
-            console.warn('[WebRTC] ICE state failed, restarting ICE...');
+          if (iceState === 'failed' && this.isInitiator) {
+            console.warn('[WebRTC] ICE state failed, initiator restarting ICE...');
             this.restartIce().catch(() => {});
           }
         }
@@ -544,6 +525,7 @@ export class WebRTCManager {
   }
 
   public async createOffer(): Promise<RTCSessionDescriptionInit> {
+    this.isInitiator = true;
     if (!this.peerConnection) {
       this.createPeerConnection();
     }
@@ -581,6 +563,7 @@ export class WebRTCManager {
   }
 
   public async handleOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+    this.isInitiator = false;
     if (!this.peerConnection) {
       this.createPeerConnection();
     }

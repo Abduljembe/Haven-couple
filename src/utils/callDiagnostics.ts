@@ -298,7 +298,7 @@ export async function testSpeakerAudio(): Promise<DiagnosticResult> {
 /**
  * Test 4: STUN & TURN NAT Traversal (Firewall & Cross-Network Traversal)
  */
-export async function testNatTraversal(): Promise<DiagnosticResult> {
+export async function testNatTraversal(roomId?: string): Promise<DiagnosticResult> {
   const result: DiagnosticResult = {
     id: 'nat_turn',
     name: 'STUN & TURN Network Traversal',
@@ -306,14 +306,14 @@ export async function testNatTraversal(): Promise<DiagnosticResult> {
     status: 'running',
     score: 0,
     title: 'Testing STUN & TURN relays...',
-    details: 'Gathering ICE candidates across Google STUN, Cloudflare, and Metered OpenRelay TURN servers...',
+    details: 'Gathering ICE candidates across Google STUN, Cloudflare, and configured TURN relays...',
   };
 
   try {
-    const iceServers = await fetchFreshIceServers();
+    const iceServers = await fetchFreshIceServers(roomId);
     const pc = new RTCPeerConnection({
       iceServers: iceServers && iceServers.length > 0 ? iceServers : GLOBAL_RTC_CONFIG.iceServers,
-      iceCandidatePoolSize: 2,
+      iceCandidatePoolSize: 0,
     });
 
     // Create a dummy data channel to trigger ICE candidate gathering
@@ -463,7 +463,7 @@ export async function testSignalingLatency(): Promise<DiagnosticResult> {
 /**
  * Run All Diagnostics Sequentially and Compile Full Report
  */
-export async function runFullDiagnostics(callType: 'audio' | 'video' = 'video'): Promise<FullDiagnosticReport> {
+export async function runFullDiagnostics(callType: 'audio' | 'video' = 'video', roomId?: string): Promise<FullDiagnosticReport> {
   const results: DiagnosticResult[] = [];
 
   // Step 1: Microphone Test
@@ -481,7 +481,7 @@ export async function runFullDiagnostics(callType: 'audio' | 'video' = 'video'):
   results.push(speakerResult);
 
   // Step 4: STUN / TURN Relays
-  const natResult = await testNatTraversal();
+  const natResult = await testNatTraversal(roomId);
   results.push(natResult);
 
   // Step 5: Signaling Server Ping

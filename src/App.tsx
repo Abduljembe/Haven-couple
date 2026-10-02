@@ -51,6 +51,7 @@ import {
   unlockAudioContext,
 } from './utils/sounds';
 import { WebRTCManager, fetchFreshIceServers } from './utils/webrtc';
+import { MediaRelayBridge } from './utils/mediaRelayBridge';
 import { SquadCallManager } from './utils/squadCallManager';
 import { Music, Play, Pause, Heart, X } from 'lucide-react';
 import { SetupSpaceModal } from './components/SetupSpaceModal';
@@ -760,6 +761,9 @@ export default function App() {
   // Refs
   const socketRef = useRef<Socket | null>(null);
   const webrtcRef = useRef<WebRTCManager | null>(null);
+  const mediaRelayBridgeRef = useRef<MediaRelayBridge | null>(null);
+  const relayEngageTimeoutRef = useRef<number | null>(null);
+  const [isCloudRelayActive, setIsCloudRelayActive] = useState(false);
   const currentCallTargetSocketIdRef = useRef<string | null>(null);
   const pendingSignalsRef = useRef<{ senderSocketId: string; signal: any }[]>([]);
   const squadCallRef = useRef<SquadCallManager | null>(null);
@@ -951,6 +955,44 @@ export default function App() {
     }
   }, [config, cryptoKey, currentUserId]);
 
+  // Built-in Cloud Media Relay Initializer (Permanent cross-network fallback)
+  const initMediaRelayBridge = useCallback((callType: CallType, stream: MediaStream | null) => {
+    if (mediaRelayBridgeRef.current) {
+      mediaRelayBridgeRef.current.stop();
+    }
+    if (!socketRef.current || !config) return null;
+
+    const bridge = new MediaRelayBridge({
+      socket: socketRef.current,
+      roomId: config.roomId,
+      callType: callType === 'audio' ? 'audio' : 'video',
+      localStream: stream,
+      onRemoteRelayStream: (remoteRelayStream) => {
+        console.log('[MediaRelayBridge] Remote relay stream active');
+        setRemoteStream(remoteRelayStream);
+        setCallStatus('connected');
+        stopRingtone();
+        playCallConnected();
+        if (callRingingTimeoutRef.current) {
+          clearTimeout(callRingingTimeoutRef.current);
+          callRingingTimeoutRef.current = null;
+        }
+        if (callContextRef.current) {
+          callContextRef.current.status = 'connected';
+          if (!callContextRef.current.connectedAt) {
+            callContextRef.current.connectedAt = Date.now();
+          }
+        }
+      },
+      onRelayStatusChange: (active) => {
+        setIsCloudRelayActive(active);
+      },
+    });
+
+    mediaRelayBridgeRef.current = bridge;
+    return bridge;
+  }, [config]);
+
   // WebRTC Manager Setup
   const initWebRTC = useCallback((callType: CallType) => {
     if (webrtcRef.current) {
@@ -972,6 +1014,10 @@ export default function App() {
       },
       onConnectionStateChange: (state) => {
         if (state === 'connected') {
+          if (relayEngageTimeoutRef.current) {
+            clearTimeout(relayEngageTimeoutRef.current);
+            relayEngageTimeoutRef.current = null;
+          }
           setCallStatus('connected');
           stopRingtone();
           playCallConnected();
@@ -986,7 +1032,10 @@ export default function App() {
             }
           }
         } else if (state === 'disconnected' || state === 'failed') {
-          console.warn('WebRTC state:', state, '— attempting global ICE restart...');
+          console.warn('WebRTC state:', state, '— activating Built-in Cloud Media Relay...');
+          if (mediaRelayBridgeRef.current && !mediaRelayBridgeRef.current.getIsActive()) {
+            mediaRelayBridgeRef.current.start().catch(() => {});
+          }
         }
       },
       onReconnecting: () => {
@@ -1068,8 +1117,8 @@ export default function App() {
 
   // Preload high-availability STUN & TURN ICE relays for cross-network WebRTC connectivity
   useEffect(() => {
-    fetchFreshIceServers().catch(() => {});
-  }, []);
+    fetchFreshIceServers(config?.roomId).catch(() => {});
+  }, [config?.roomId]);
 
   // Socket Connection & Real-Time Events
   useEffect(() => {
@@ -1094,6 +1143,12 @@ export default function App() {
         },
         location: myLocation,
       });
+    });
+
+    // Listen for room TURN relay configuration updates
+    socket.on('turn-config-updated', () => {
+      console.log('[WebRTC] Sanctuary TURN relay updated, refreshing ICE server routes...');
+      fetchFreshIceServers(config.roomId, true).catch(() => {});
     });
 
     // Space access denied when password doesn't match registered space
@@ -1591,6 +1646,16 @@ export default function App() {
         callContextRef.current.logged = true;
       }
       pendingSignalsRef.current = [];
+      if (relayEngageTimeoutRef.current) {
+        clearTimeout(relayEngageTimeoutRef.current);
+        relayEngageTimeoutRef.current = null;
+      }
+      if (mediaRelayBridgeRef.current) {
+        mediaRelayBridgeRef.current.stop();
+        mediaRelayBridgeRef.current = null;
+      }
+      setIsCloudRelayActive(false);
+
       if (webrtcRef.current) {
         webrtcRef.current.cleanup();
       }
@@ -2464,6 +2529,16 @@ export default function App() {
       rtc.createPeerConnection();
       await drainPendingSignals(rtc);
 
+      // Initialize Built-in Cloud Media Relay (Permanent cross-network fallback)
+      const bridge = initMediaRelayBridge(callType, stream);
+      if (relayEngageTimeoutRef.current) clearTimeout(relayEngageTimeoutRef.current);
+      relayEngageTimeoutRef.current = window.setTimeout(() => {
+        if (bridge && !bridge.getIsActive()) {
+          console.log('[Call] P2P connecting timeout reached across networks — engaging Built-in Cloud Relay');
+          bridge.start().catch(() => {});
+        }
+      }, 3500);
+
       socketRef.current.emit('call-request', {
         roomId: config.roomId,
         callType,
@@ -2523,6 +2598,16 @@ export default function App() {
       setLocalStream(stream);
       rtc.createPeerConnection();
       await drainPendingSignals(rtc);
+
+      // Initialize Built-in Cloud Media Relay (Permanent cross-network fallback)
+      const bridge = initMediaRelayBridge(callType, stream);
+      if (relayEngageTimeoutRef.current) clearTimeout(relayEngageTimeoutRef.current);
+      relayEngageTimeoutRef.current = window.setTimeout(() => {
+        if (bridge && !bridge.getIsActive()) {
+          console.log('[Call] P2P connecting timeout reached across networks — engaging Built-in Cloud Relay');
+          bridge.start().catch(() => {});
+        }
+      }, 3500);
 
       socketRef.current.emit('call-accepted', {
         roomId: config.roomId,
@@ -2591,6 +2676,16 @@ export default function App() {
     }
     pendingSignalsRef.current = [];
     currentCallTargetSocketIdRef.current = null;
+    if (relayEngageTimeoutRef.current) {
+      clearTimeout(relayEngageTimeoutRef.current);
+      relayEngageTimeoutRef.current = null;
+    }
+    if (mediaRelayBridgeRef.current) {
+      mediaRelayBridgeRef.current.stop();
+      mediaRelayBridgeRef.current = null;
+    }
+    setIsCloudRelayActive(false);
+
     if (config && socketRef.current) {
       socketRef.current.emit('call-ended', {
         roomId: config.roomId,
@@ -2738,6 +2833,9 @@ export default function App() {
     if (webrtcRef.current) {
       nextMuted = webrtcRef.current.toggleMuteAudio();
     }
+    if (mediaRelayBridgeRef.current) {
+      mediaRelayBridgeRef.current.setMuted(nextMuted);
+    }
     if (squadCallRef.current) {
       nextMuted = squadCallRef.current.toggleMuteAudio();
     }
@@ -2760,6 +2858,9 @@ export default function App() {
     let nextOff = !isVideoOff;
     if (webrtcRef.current) {
       nextOff = webrtcRef.current.toggleMuteVideo();
+    }
+    if (mediaRelayBridgeRef.current) {
+      mediaRelayBridgeRef.current.setVideoOff(nextOff);
     }
     if (squadCallRef.current) {
       nextOff = squadCallRef.current.toggleMuteVideo();
@@ -3657,6 +3758,7 @@ export default function App() {
       {/* Active Audio Call Screen */}
       {activeCallType === 'audio' && !isWatchTogetherOpen && !isChessModalOpen && !isGamesLoungeOpen && (
         <AudioCallModal
+          roomId={config.roomId}
           partnerName={config.partnerName}
           partnerAvatar={config.partnerAvatar}
           callStatus={callStatus}
@@ -3679,6 +3781,7 @@ export default function App() {
           isEchoSuppressionActive={isEchoSuppressionActive}
           onToggleEchoSuppression={handleToggleEchoSuppression}
           partnerIsMuted={partnerIsMuted}
+          isCloudRelayActive={isCloudRelayActive}
           getNetworkStats={() =>
             webrtcRef.current
               ? webrtcRef.current.getNetworkStats()
@@ -3695,6 +3798,7 @@ export default function App() {
       {/* Active HD Video Call Screen with Picture-in-Picture (PiP) Floating Overlay */}
       {activeCallType === 'video' && (
         <VideoCallModal
+          roomId={config.roomId}
           partnerName={config.partnerName}
           partnerAvatar={config.partnerAvatar}
           callStatus={callStatus}
@@ -3718,6 +3822,7 @@ export default function App() {
           onToggleEchoSuppression={handleToggleEchoSuppression}
           partnerIsMuted={partnerIsMuted}
           partnerIsVideoOff={partnerIsVideoOff}
+          isCloudRelayActive={isCloudRelayActive}
           getNetworkStats={() =>
             webrtcRef.current
               ? webrtcRef.current.getNetworkStats()
@@ -3984,8 +4089,12 @@ export default function App() {
         isOpen={isDiagnosticsModalOpen}
         onClose={() => setIsDiagnosticsModalOpen(false)}
         callType="video"
+        roomId={config?.roomId}
         onAutoFixAndReconnect={async () => {
           unlockAudioContext();
+          if (config?.roomId) {
+            await fetchFreshIceServers(config.roomId, true);
+          }
           if (webrtcRef.current) {
             await webrtcRef.current.restartIce();
           }

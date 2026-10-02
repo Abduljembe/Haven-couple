@@ -1110,11 +1110,43 @@ async function startServer() {
         senderId: currentUserId,
         signal: data.signal,
       };
-      if (data.targetSocketId) {
+      if (data.targetSocketId && io.sockets.sockets.has(data.targetSocketId)) {
         io.to(data.targetSocketId).emit('signal', payload);
       } else {
         socket.to(data.roomId).emit('signal', payload);
       }
+    });
+
+    // Built-in Cross-Network WebSocket Media Relay (Permanent solution without third-party TURN)
+    socket.on('call:relay-audio', (data: { roomId: string; pcm: number[]; sampleRate: number; isMuted?: boolean }) => {
+      if (!data?.roomId) return;
+      socket.to(data.roomId).emit('call:relay-audio', {
+        senderSocketId: socket.id,
+        senderId: currentUserId,
+        pcm: data.pcm,
+        sampleRate: data.sampleRate,
+        isMuted: data.isMuted,
+      });
+    });
+
+    socket.on('call:relay-video', (data: { roomId: string; frame: string; isVideoOff?: boolean }) => {
+      if (!data?.roomId) return;
+      socket.to(data.roomId).emit('call:relay-video', {
+        senderSocketId: socket.id,
+        senderId: currentUserId,
+        frame: data.frame,
+        isVideoOff: data.isVideoOff,
+      });
+    });
+
+    socket.on('call:relay-active', (data: { roomId: string; active: boolean; callType?: string }) => {
+      if (!data?.roomId) return;
+      socket.to(data.roomId).emit('call:relay-active', {
+        senderSocketId: socket.id,
+        senderId: currentUserId,
+        active: data.active,
+        callType: data.callType,
+      });
     });
 
     // Squad WebRTC Targeted Signaling (P2P mesh routing for up to 5 members)
@@ -1136,10 +1168,10 @@ async function startServer() {
         responderSocketId: socket.id,
         responderId: currentUserId,
       };
-      if (data.targetSocketId) {
+      if (data.targetSocketId && io.sockets.sockets.has(data.targetSocketId)) {
         io.to(data.targetSocketId).emit('call-accepted', payload);
       } else {
-        // Fallback broadcast to room only if targetSocketId wasn't specified
+        // Fallback broadcast to room if targetSocketId wasn't specified or socket disconnected
         socket.to(data.roomId).emit('call-accepted', payload);
       }
     });
@@ -3329,9 +3361,47 @@ async function startServer() {
     });
   });
 
-  // Global High-Availability WebRTC ICE Servers (STUN & TURN for cross-country calling)
+  // In-memory Room-level TURN Relay Configurations (stores custom Metered or standard TURN server per room)
+  interface RoomTurnConfig {
+    meteredDomain?: string;
+    meteredApiKey?: string;
+    turnUrl?: string;
+    turnUsername?: string;
+    turnCredential?: string;
+    cachedIceServers?: any[];
+    cachedUntil?: number;
+  }
+  const roomTurnConfigs = new Map<string, RoomTurnConfig>();
+
+  // Global High-Availability WebRTC ICE Servers (STUN & TURN for cross-country and cross-carrier calling)
   app.get('/api/webrtc/ice-servers', async (req, res) => {
-    // Check if custom Metered or dedicated TURN credentials are provided via environment
+    const roomId = (req.query.roomId as string || '').toLowerCase().trim();
+    const roomConfig = roomId ? roomTurnConfigs.get(roomId) : undefined;
+
+    // 1. Check room-level Metered TURN credentials if configured
+    if (roomConfig?.meteredApiKey && roomConfig?.meteredDomain) {
+      // Check cache (valid for 1 hour)
+      if (roomConfig.cachedIceServers && roomConfig.cachedUntil && Date.now() < roomConfig.cachedUntil) {
+        return res.json({ iceServers: roomConfig.cachedIceServers });
+      }
+      try {
+        const meteredRes = await fetch(
+          `https://${roomConfig.meteredDomain}/api/v1/turn/credentials?apiKey=${roomConfig.meteredApiKey}`
+        );
+        if (meteredRes.ok) {
+          const meteredServers = await meteredRes.json();
+          if (Array.isArray(meteredServers) && meteredServers.length > 0) {
+            roomConfig.cachedIceServers = meteredServers;
+            roomConfig.cachedUntil = Date.now() + 3600 * 1000;
+            return res.json({ iceServers: meteredServers });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch room Metered TURN credentials:', e);
+      }
+    }
+
+    // 2. Check environment-level Metered credentials
     if (process.env.METERED_API_KEY && process.env.METERED_DOMAIN) {
       try {
         const meteredRes = await fetch(
@@ -3348,44 +3418,29 @@ async function startServer() {
       }
     }
 
-    // High-Availability Worldwide STUN & TURN Relay Servers
-    const iceServers = [
+    // High-Availability Worldwide Anycast STUN Servers (Google, Cloudflare, Twilio, Mozilla, Sipgate)
+    const iceServers: any[] = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun3.l.google.com:19302' },
       { urls: 'stun:stun4.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: 'stun:standard.relay.metered.ca:80' },
-      { urls: 'stun:standard.relay.metered.ca:443' },
-      {
-        urls: [
-          'turn:standard.relay.metered.ca:80',
-          'turn:standard.relay.metered.ca:80?transport=tcp',
-          'turn:standard.relay.metered.ca:443',
-          'turn:standard.relay.metered.ca:443?transport=tcp',
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
-      {
-        urls: [
-          'turns:standard.relay.metered.ca:443?transport=tcp',
-          'turns:standard.relay.metered.ca:443',
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
-      {
-        urls: [
-          'turn:openrelay.metered.ca:80',
-          'turn:openrelay.metered.ca:443',
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+      { urls: 'stun:stun.services.mozilla.com:3478' },
+      { urls: 'stun:stun.sipgate.net:3478' },
     ];
 
+    // Room-level standard TURN server
+    if (roomConfig?.turnUrl && roomConfig?.turnUsername && roomConfig?.turnCredential) {
+      iceServers.unshift({
+        urls: [roomConfig.turnUrl],
+        username: roomConfig.turnUsername,
+        credential: roomConfig.turnCredential,
+      });
+    }
+
+    // Environment-level standard TURN server
     if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
       iceServers.unshift({
         urls: [process.env.TURN_URL],
@@ -3395,6 +3450,103 @@ async function startServer() {
     }
 
     res.json({ iceServers });
+  });
+
+  // Save room-specific TURN relay credentials (Metered or standard TURN)
+  app.post('/api/webrtc/turn-config', async (req, res) => {
+    try {
+      const { roomId, meteredDomain, meteredApiKey, turnUrl, turnUsername, turnCredential } = req.body || {};
+      if (!roomId) {
+        return res.status(400).json({ error: 'roomId is required' });
+      }
+
+      const rId = String(roomId).toLowerCase().trim();
+
+      // Sanitize Metered inputs
+      let cleanDomain = (meteredDomain || '').trim()
+        .replace(/^https?:\/\//i, '')
+        .replace(/\/.*$/, '')
+        .trim();
+      if (cleanDomain && !cleanDomain.includes('.')) {
+        cleanDomain = `${cleanDomain}.metered.live`;
+      } else if (cleanDomain.endsWith('.metered.ca')) {
+        cleanDomain = cleanDomain.replace(/\.metered\.ca$/i, '.metered.live');
+      }
+
+      let cleanApiKey = (meteredApiKey || '').trim()
+        .replace(/^apiKey=/i, '')
+        .replace(/^["']|["']$/g, '')
+        .trim();
+
+      // Test Metered credentials if provided
+      let testedServers: any[] | null = null;
+      if (cleanDomain && cleanApiKey) {
+        try {
+          const testRes = await fetch(
+            `https://${cleanDomain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(cleanApiKey)}`
+          );
+          if (!testRes.ok) {
+            const errBody = await testRes.json().catch(() => null);
+            const meteredMsg = errBody?.error || `HTTP ${testRes.status}`;
+            if (testRes.status === 401) {
+              return res.status(400).json({
+                error: `Metered API test failed (status 401: ${meteredMsg}). In your Metered.ca dashboard, ensure: 1) You created a "TURN Server" app; 2) The Domain is exactly "${cleanDomain}"; 3) You copied the API Key generated for this TURN app under "Developers" -> "API Keys" (do not use your account login password or a video room key).`,
+                testedDomain: cleanDomain,
+              });
+            }
+            return res.status(400).json({
+              error: `Metered API test failed (status ${testRes.status}: ${meteredMsg}). Please check your domain and API key.`,
+              testedDomain: cleanDomain,
+            });
+          }
+          testedServers = await testRes.json();
+        } catch (e: any) {
+          return res.status(400).json({
+            error: `Could not reach Metered endpoint (https://${cleanDomain}): ${e?.message || e}`,
+          });
+        }
+      }
+
+      const config: RoomTurnConfig = {
+        meteredDomain: cleanDomain || undefined,
+        meteredApiKey: cleanApiKey || undefined,
+        turnUrl: turnUrl?.trim(),
+        turnUsername: turnUsername?.trim(),
+        turnCredential: turnCredential?.trim(),
+        cachedIceServers: testedServers || undefined,
+        cachedUntil: testedServers ? Date.now() + 3600 * 1000 : undefined,
+      };
+
+      roomTurnConfigs.set(rId, config);
+
+      // Notify both peers in the room to refresh their ICE servers immediately
+      io.to(rId).emit('turn-config-updated', { roomId: rId });
+
+      res.json({
+        success: true,
+        message: 'TURN Relay successfully verified and activated for your Sanctuary!',
+        activeServersCount: testedServers?.length || (turnUrl ? 1 : 0),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to save TURN configuration' });
+    }
+  });
+
+  // Get room-specific TURN relay status (masks sensitive secret key)
+  app.get('/api/webrtc/turn-config', (req, res) => {
+    const roomId = (req.query.roomId as string || '').toLowerCase().trim();
+    if (!roomId) return res.json({ configured: false });
+
+    const config = roomTurnConfigs.get(roomId);
+    if (!config) return res.json({ configured: false });
+
+    res.json({
+      configured: Boolean(config.meteredApiKey || config.turnUrl),
+      type: config.meteredApiKey ? 'metered' : config.turnUrl ? 'standard' : 'none',
+      meteredDomain: config.meteredDomain,
+      turnUrl: config.turnUrl,
+      turnUsername: config.turnUsername,
+    });
   });
 
   // --- HAVEN SINGLES REST APIS ---

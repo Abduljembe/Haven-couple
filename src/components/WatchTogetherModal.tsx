@@ -90,7 +90,7 @@ import { VerifiedBadgeOverlay } from './common/VerifiedBadgeOverlay';
 import { useHavenVoiceAssistant } from '../hooks/useHavenVoiceAssistant';
 import { HavenVoiceControl } from './HavenVoiceControl';
 import { SeriesSeasonPickerModal } from './SeriesSeasonPickerModal';
-import { isSeriesItem, cleanSeriesTitle } from '../utils/seriesData';
+import { isSeriesItem, cleanSeriesTitle, getSeriesSeasons } from '../utils/seriesData';
 
 interface WatchTogetherModalProps {
   isOpen: boolean;
@@ -606,8 +606,36 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
     broadcastSync(true, 0, media);
   }, [isScreenSharing, localScreenStream, broadcastSync]);
 
-  // Resolve the next video in sequence from current search results, watchlist, or featured catalog
+  // Resolve the next video in sequence: TV series auto-advances to next episode/season, or next movie in queue
   const getNextVideo = useCallback((): MediaItem => {
+    // 0. TV Series Autoplay: Auto-advance to next episode or next season seamlessly
+    if (isSeriesItem(currentMedia)) {
+      const currentSeason = currentMedia.season || 1;
+      const currentEp = currentMedia.episode || 1;
+      const seasons = getSeriesSeasons(currentMedia);
+      const seasonObj = seasons.find((s) => s.seasonNumber === currentSeason);
+      const totalEpisodesInSeason = seasonObj?.episodeCount || 10;
+      const maxSeason = seasons.length > 0 ? seasons[seasons.length - 1].seasonNumber : 1;
+
+      let targetSeason = currentSeason;
+      let targetEp = currentEp + 1;
+
+      if (currentEp >= totalEpisodesInSeason) {
+        // Current season has finished! Transition to the first episode of the next season
+        if (currentSeason < maxSeason) {
+          targetSeason = currentSeason + 1;
+          targetEp = 1;
+        } else {
+          // Wrapped around the final season: loop back to Season 1 Episode 1
+          targetSeason = 1;
+          targetEp = 1;
+        }
+      }
+
+      const color = vidukiConfig.themeColor || vidukiColorInput || 'f43f5e';
+      return switchVidukiEpisode(currentMedia, targetSeason, targetEp, color);
+    }
+
     // 1. If currently browsing/searching with multiple results, pick the next one in the shelf
     if (searchResults && searchResults.length > 1) {
       const idx = searchResults.findIndex((m) => m.id === currentMedia.id || m.url === currentMedia.url);
@@ -1003,13 +1031,25 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
           last_episode_watched: data.media?.episode || currentMedia.episode,
         });
       }
+
+      // 3. Handle video ended event from Viduki / embed player to auto-advance episodes and seasons
+      if (
+        data.type === 'viduki:ended' ||
+        data.type === 'ended' ||
+        data.event === 'ended' ||
+        data.event === 'onEnded' ||
+        data.action === 'ended' ||
+        (data.progress && typeof data.progress.watched === 'number' && typeof data.progress.duration === 'number' && data.progress.duration > 30 && data.progress.watched >= data.progress.duration - 2)
+      ) {
+        handleVideoFinished();
+      }
     };
 
     window.addEventListener('message', handleVidukiMessage);
     return () => {
       window.removeEventListener('message', handleVidukiMessage);
     };
-  }, [currentMedia, vidukiConfig, handleSwitchVidukiServer, switchToFallbackApi]);
+  }, [currentMedia, vidukiConfig, handleSwitchVidukiServer, switchToFallbackApi, handleVideoFinished]);
 
   // Save Viduki configuration
   const handleSaveVidukiConfig = async () => {
@@ -2689,12 +2729,21 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          const curr = currentMedia.episode || 1;
-                          if (curr > 1) handleSwitchVidukiEpisode(currentMedia.season || 1, curr - 1);
+                          const currSeason = currentMedia.season || 1;
+                          const currEp = currentMedia.episode || 1;
+                          if (currEp > 1) {
+                            handleSwitchVidukiEpisode(currSeason, currEp - 1);
+                          } else if (currSeason > 1) {
+                            // Jump to previous season's last episode
+                            const seasons = getSeriesSeasons(currentMedia);
+                            const prevSeasonObj = seasons.find((s) => s.seasonNumber === currSeason - 1);
+                            const prevEpCount = prevSeasonObj?.episodeCount || 10;
+                            handleSwitchVidukiEpisode(currSeason - 1, prevEpCount);
+                          }
                         }}
-                        disabled={(currentMedia.episode || 1) <= 1}
+                        disabled={(currentMedia.season || 1) <= 1 && (currentMedia.episode || 1) <= 1}
                         className="px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 hover:text-white disabled:opacity-30 text-[9px] font-semibold cursor-pointer"
-                        title="Previous Episode"
+                        title="Previous Episode / Season"
                       >
                         ◀ Ep
                       </button>
@@ -2708,17 +2757,31 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
                         title="Browse all seasons and choose an episode"
                       >
                         <Layers className="w-3 h-3" />
-                        <span>All Episodes</span>
+                        <span>S{currentMedia.season || 1}:E{currentMedia.episode || 1}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => {
-                          const curr = currentMedia.episode || 1;
-                          handleSwitchVidukiEpisode(currentMedia.season || 1, curr + 1);
+                          const currSeason = currentMedia.season || 1;
+                          const currEp = currentMedia.episode || 1;
+                          const seasons = getSeriesSeasons(currentMedia);
+                          const seasonObj = seasons.find((s) => s.seasonNumber === currSeason);
+                          const totalEpisodesInSeason = seasonObj?.episodeCount || 10;
+                          const maxSeason = seasons.length > 0 ? seasons[seasons.length - 1].seasonNumber : 1;
+
+                          if (currEp < totalEpisodesInSeason) {
+                            handleSwitchVidukiEpisode(currSeason, currEp + 1);
+                          } else if (currSeason < maxSeason) {
+                            // Next Season, Episode 1!
+                            handleSwitchVidukiEpisode(currSeason + 1, 1);
+                          } else {
+                            // Final episode of final season: loop back to S1E1
+                            handleSwitchVidukiEpisode(1, 1);
+                          }
                         }}
                         className="px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 hover:text-white text-[9px] font-semibold cursor-pointer"
-                        title="Next Episode"
+                        title="Next Episode / Next Season"
                       >
                         Ep ▶
                       </button>
@@ -2847,7 +2910,13 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
               <div className="max-w-md w-full bg-slate-900 border border-rose-500/40 rounded-2xl p-5 text-center shadow-2xl space-y-4">
                 <div className="flex items-center justify-center gap-2 text-rose-400 text-xs font-bold uppercase tracking-wider">
                   <Sparkles className="w-4 h-4 text-rose-400 animate-pulse" />
-                  <span>Video Finished • Playing Next in {nextCountdown.secondsLeft}s</span>
+                  <span>
+                    {isSeriesItem(nextCountdown.nextMovie) && nextCountdown.nextMovie.season !== currentMedia.season
+                      ? `Season ${currentMedia.season || 1} Complete • Next Season in ${nextCountdown.secondsLeft}s`
+                      : isSeriesItem(nextCountdown.nextMovie)
+                      ? `Episode Finished • Next Episode in ${nextCountdown.secondsLeft}s`
+                      : `Video Finished • Playing Next in ${nextCountdown.secondsLeft}s`}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-3 bg-slate-800/90 p-3 rounded-xl border border-slate-700 text-left">
@@ -2859,7 +2928,9 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
                   <div className="min-w-0 flex-1">
                     <h4 className="text-sm font-bold text-white truncate font-serif">{nextCountdown.nextMovie.title}</h4>
                     <p className="text-xs text-rose-300/80 truncate mt-0.5">
-                      {nextCountdown.nextMovie.artist || nextCountdown.nextMovie.genre || 'Up Next'}
+                      {isSeriesItem(nextCountdown.nextMovie)
+                        ? `Season ${nextCountdown.nextMovie.season || 1} • Episode ${nextCountdown.nextMovie.episode || 1}`
+                        : nextCountdown.nextMovie.artist || nextCountdown.nextMovie.genre || 'Up Next'}
                     </p>
                   </div>
                 </div>
@@ -2878,7 +2949,11 @@ export const WatchTogetherModal: React.FC<WatchTogetherModalProps> = ({
                     className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 shadow-lg shadow-rose-600/30 flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
                   >
                     <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Play Next Now</span>
+                    <span>
+                      {isSeriesItem(nextCountdown.nextMovie) && nextCountdown.nextMovie.season !== currentMedia.season
+                        ? 'Start Next Season'
+                        : 'Play Next Episode'}
+                    </span>
                   </button>
                 </div>
               </div>

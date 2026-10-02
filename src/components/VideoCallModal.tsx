@@ -52,6 +52,8 @@ interface VideoCallModalProps {
   onToggleEchoSuppression?: () => void;
   partnerIsMuted?: boolean;
   partnerIsVideoOff?: boolean;
+  roomId?: string;
+  isCloudRelayActive?: boolean;
 }
 
 export const VideoCallModal: React.FC<VideoCallModalProps> = ({
@@ -79,6 +81,8 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
   onToggleEchoSuppression,
   partnerIsMuted = false,
   partnerIsVideoOff = false,
+  roomId,
+  isCloudRelayActive = false,
 }) => {
   const [duration, setDuration] = useState(0);
   const [isPipTopLeft, setIsPipTopLeft] = useState(false);
@@ -642,6 +646,19 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
               </span>
             </div>
 
+            {callStatus === 'connecting' && (
+              <div className="mt-3 px-3 py-2 rounded-xl bg-[#202c33]/90 border border-[#2a3942] text-xs max-w-sm text-center text-[#8696a0] flex flex-col items-center gap-1.5 animate-in fade-in">
+                <span>Connecting across networks... If on 4G/5G or strict Wi-Fi:</span>
+                <button
+                  type="button"
+                  onClick={() => setIsDiagnosticsOpen(true)}
+                  className="text-[#00a884] hover:text-[#25d366] font-semibold underline cursor-pointer text-xs"
+                >
+                  Open Diagnostics & TURN Relay Setup
+                </button>
+              </div>
+            )}
+
             {callStatus === 'connected' && !hasRemoteVideoTrack && !partnerIsVideoOff && (
               <p className="text-xs text-[#8696a0] max-w-sm text-center mt-3 leading-relaxed">
                 If the video takes a moment across borders, voice is still live. Tap <strong className="text-[#00a884]">Reconnect</strong> below to refresh the route.
@@ -718,6 +735,18 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
               )}
             </div>
+
+            {isCloudRelayActive && (
+              <div
+                id="video-call-relay-active-badge"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[11px] text-emerald-300 font-semibold shrink-0 shadow-2xs ml-1"
+                title="Real-time media streaming active via Built-in Cloud Media Relay"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="hidden sm:inline">Cloud Relay Active</span>
+                <span className="sm:hidden">Relay</span>
+              </div>
+            )}
           </div>
 
           {/* E2EE, ANC, Echo, Network Health & Reconnect Controls */}
@@ -1046,6 +1075,7 @@ export const VideoCallModal: React.FC<VideoCallModalProps> = ({
     isOpen={isDiagnosticsOpen}
     onClose={() => setIsDiagnosticsOpen(false)}
     callType="video"
+    roomId={roomId}
     onAutoFixAndReconnect={async () => {
       unlockAudioContext();
       if (remoteVideoRef.current && remoteStream) {
